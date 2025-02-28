@@ -8,7 +8,8 @@ import toast, { Toaster } from 'react-hot-toast';
 import frameSdk, { Context } from '@farcaster/frame-sdk';
 import { useAccount, useConnect } from 'wagmi';
 
-import { fetchOwnedBaseColors, generateColorSvg, scheduleProfileUpdates, BaseColor } from '../utils/baseColors';
+import { fetchOwnedBaseColors, generateColorSvg, BaseColor } from '../utils/baseColors';
+// import { scheduleProfileUpdates } from '../utils/baseColors'; // Will be used when auto-cycle is implemented
 
 // Type declaration for the global window object
 declare global {
@@ -108,11 +109,13 @@ export default function ColorFrame({ context }: ColorFrameProps) {
   const deepLinkUrl = deepLinkUrlState[0];
   const [loading, setLoading] = useState<boolean>(false);
 
+  // Auto-cycle feature temporarily disabled - will implement later
+  // const [selectedInterval, setSelectedInterval] = useState<'daily' | 'weekly' | 'monthly'>('daily');
+  // const [autoCycleEnabled, setAutoCycleEnabled] = useState<boolean>(false);
+
   // We don't use the signer atom values directly but need the atom for state management
   useAtom(signerAtom);
   const [neynarSignerUuid, setNeynarSignerUuid] = useAtom(neynarSignerUuidAtom);
-  const [selectedInterval, setSelectedInterval] = useState<'daily' | 'weekly' | 'monthly'>('daily');
-  const [autoCycleEnabled, setAutoCycleEnabled] = useState<boolean>(false);
   const [fetchingNFTs, setFetchingNFTs] = useState<boolean>(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [hasFetchedColors, setHasFetchedColors] = useState<boolean>(false);
@@ -301,6 +304,51 @@ export default function ColorFrame({ context }: ColorFrameProps) {
     setHasFetchedColors(false);
   }, [address]);
 
+  // Function to schedule auto cycling - temporarily disabled
+  /* 
+  const handleScheduleUpdates = async () => {
+    if (!context?.user?.fid) {
+      toast.error('FID not available, cannot schedule updates');
+      return;
+    }
+    
+    if (!neynarSignerUuid) {
+      toast.error('Please connect with Farcaster first');
+      connectWithNeynar();
+      return;
+    }
+    
+    if (!selectedColor) {
+      toast.error('Please select a color first');
+      return;
+    }
+    
+    const toastId = toast.loading(`Scheduling ${selectedInterval} updates...`);
+    
+    try {
+      // Call the API to schedule updates
+      const response = await scheduleProfileUpdates({
+        fid: context.user.fid,
+        signerUuid: neynarSignerUuid,
+        interval: selectedInterval,
+        colors: ownedColors.map(c => c.colorValue)
+      });
+      
+      toast.dismiss(toastId);
+      
+      if (response.success) {
+        toast.success(`Auto updates scheduled for ${selectedInterval} interval!`);
+      } else {
+        throw new Error(response.error || 'Unknown error');
+      }
+    } catch (error) {
+      console.error('Error scheduling updates:', error);
+      toast.dismiss(toastId);
+      toast.error(`Failed to schedule updates: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  };
+  */
+
   // Function to set profile picture using Neynar
   const updateProfilePicture = async () => {
     if (!context?.user?.fid) {
@@ -387,45 +435,6 @@ export default function ColorFrame({ context }: ColorFrameProps) {
     }
   };
 
-  // Function to schedule auto cycling
-  const handleScheduleUpdates = async () => {
-    if (!context?.user?.fid) {
-      toast.error('FID not available, cannot schedule updates');
-      return;
-    }
-    
-    if (ownedColors.length === 0) {
-      toast.error('You need to own Base Colors to schedule updates');
-      return;
-    }
-    
-    if (!neynarSignerUuid) {
-      toast.error('You need to connect with Farcaster first');
-      return;
-    }
-    
-    // Convert string tokenIds to numbers for the API call
-    const colorIds = ownedColors.map(color => parseInt(color.tokenId, 10));
-    const toastId = toast.loading(`Scheduling ${selectedInterval} profile picture updates...`);
-    
-    try {
-      const result = await scheduleProfileUpdates(
-        context.user.fid, 
-        colorIds, 
-        selectedInterval,
-        neynarSignerUuid
-      );
-      toast.success(`Successfully scheduled ${selectedInterval} profile picture updates!`);
-      console.log('Schedule result:', result);
-    } catch (error) {
-      console.error('Error scheduling updates:', error);
-      const errorMsg = error instanceof Error ? error.message : String(error);
-      toast.error(`Failed to schedule updates: ${errorMsg}`);
-    } finally {
-      toast.dismiss(toastId);
-    }
-  };
-
   if (!isInFrame) {
     return (
       <div className="p-4 text-center">
@@ -507,6 +516,45 @@ export default function ColorFrame({ context }: ColorFrameProps) {
                   </div>
                 )}
               </div>
+
+              {/* Auto-cycle feature - temporarily disabled 
+              <div className="w-full mb-4">
+                <div className="flex items-center mb-2">
+                  <input
+                    id="autoCycle"
+                    type="checkbox"
+                    className="mr-2"
+                    checked={autoCycleEnabled}
+                    onChange={(e) => setAutoCycleEnabled(e.target.checked)}
+                  />
+                  <label htmlFor="autoCycle">Auto-cycle through colors</label>
+                </div>
+                
+                {autoCycleEnabled && (
+                  <div className="ml-6 mb-2">
+                    <label htmlFor="interval" className="block mb-1 text-sm">Change interval:</label>
+                    <select 
+                      id="interval"
+                      className="block w-full p-2 border border-gray-300 rounded-md"
+                      value={selectedInterval}
+                      onChange={(e) => setSelectedInterval(e.target.value as 'daily' | 'weekly' | 'monthly')}
+                    >
+                      <option value="daily">Daily</option>
+                      <option value="weekly">Weekly</option>
+                      <option value="monthly">Monthly</option>
+                    </select>
+                    
+                    <button
+                      className="mt-2 bg-green-600 text-white py-1 px-3 rounded-md hover:bg-green-700 text-sm"
+                      onClick={handleScheduleUpdates}
+                      disabled={loading}
+                    >
+                      Schedule Auto Updates
+                    </button>
+                  </div>
+                )}
+              </div>
+              */}
               
               <div className="w-full mb-4">
                 <button
@@ -520,40 +568,6 @@ export default function ColorFrame({ context }: ColorFrameProps) {
                 {errorMessage && (
                   <div className="p-3 mt-2 mb-2 bg-red-100 border border-red-300 rounded text-red-800 text-sm">
                     {errorMessage}
-                  </div>
-                )}
-                
-                <div className="flex items-center mb-2">
-                  <input
-                    id="autoCycle"
-                    type="checkbox"
-                    className="mr-2"
-                    checked={autoCycleEnabled}
-                    onChange={(e) => setAutoCycleEnabled(e.target.checked)}
-                  />
-                  <label htmlFor="autoCycle">Auto-cycle through colors</label>
-                </div>
-                
-                {autoCycleEnabled && (
-                  <div className="mb-4">
-                    <label className="block mb-2">Change interval:</label>
-                    <select
-                      className="w-full p-2 border rounded-md"
-                      value={selectedInterval}
-                      onChange={(e) => setSelectedInterval(e.target.value as 'daily' | 'weekly' | 'monthly')}
-                    >
-                      <option value="daily">Daily</option>
-                      <option value="weekly">Weekly</option>
-                      <option value="monthly">Monthly</option>
-                    </select>
-                    
-                    <button
-                      className="bg-indigo-600 text-white py-2 px-4 rounded-md hover:bg-indigo-700 w-full mt-2"
-                      onClick={handleScheduleUpdates}
-                      disabled={loading}
-                    >
-                      Schedule Auto Updates
-                    </button>
                   </div>
                 )}
               </div>
