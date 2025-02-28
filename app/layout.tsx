@@ -5,12 +5,19 @@ import { WagmiProvider } from "./providers/WagmiProvider";
 
 const inter = Inter({ subsets: ["latin"] });
 
-// Frame metadata for Farcaster
-export function generateFrameMetadata(): Metadata {
+// Generate metadata with frame support for Farcaster
+export function generateMetadata(): Metadata {
   const url = process.env.NEXT_PUBLIC_BASE_URL || "https://bountycaster-basecolors.vercel.app";
   
   return {
     metadataBase: new URL(url),
+    title: "Base Colors PFP Manager",
+    description: "Change your Farcaster profile picture to any Base Colors you own",
+    openGraph: {
+      images: ["/base-colors-og.svg"],
+      title: "Base Colors PFP Manager",
+      description: "Change your Farcaster profile picture to any Base Colors you own",
+    },
     other: {
       "fc:frame": JSON.stringify({
         version: "next",
@@ -27,15 +34,8 @@ export function generateFrameMetadata(): Metadata {
         },
       }),
     },
-    openGraph: {
-      images: ["/base-colors-og.svg"],
-      title: "Base Colors PFP Manager",
-      description: "Change your Farcaster profile picture to any Base Colors you own",
-    },
   };
 }
-
-export const metadata = generateFrameMetadata();
 
 export default function RootLayout({
   children,
