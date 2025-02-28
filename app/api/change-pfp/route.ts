@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { del } from '@vercel/blob';
 
 // Use environment variable for API key - this is the authentication key
 const NEYNAR_API_KEY = process.env.NEYNAR_API_KEY || '';
@@ -7,13 +8,37 @@ interface RequestBody {
   fid: number;
   pfp: string; // URL of the profile picture
   signerUuid: string; // Neynar signer UUID
+  previousPfp?: string; // Optional previous profile picture URL to delete
+}
+
+/**
+ * Helper function to delete a blob from Vercel Blob storage
+ */
+async function deleteOldProfilePicture(url: string) {
+  if (!url || !url.includes('blob.vercel-storage.com')) {
+    return false; // Not a Vercel Blob URL
+  }
+  
+  try {
+    // Extract the pathname from the URL (the blob identifier)
+    const urlObj = new URL(url);
+    const pathname = urlObj.pathname.substring(1); // Remove leading slash
+    
+    // Delete the blob
+    await del(pathname);
+    console.log(`Deleted old profile picture: ${url}`);
+    return true;
+  } catch (error) {
+    console.error('Failed to delete old profile picture:', error);
+    return false;
+  }
 }
 
 export async function POST(request: NextRequest) {
   try {
     // Parse the request body
     const body = await request.json() as RequestBody;
-    const { fid, pfp, signerUuid } = body;
+    const { fid, pfp, signerUuid, previousPfp } = body;
     
     // Log the request details
     console.log(`Received request to change PFP for FID: ${fid}`);
@@ -59,6 +84,11 @@ export async function POST(request: NextRequest) {
     }
     
     console.log('Profile picture updated successfully:', responseData);
+    
+    // Attempt to delete the previous profile picture if provided
+    if (previousPfp) {
+      await deleteOldProfilePicture(previousPfp);
+    }
     
     // Return the response
     return NextResponse.json({

@@ -108,6 +108,8 @@ export default function ColorFrame({ context }: ColorFrameProps) {
   const deepLinkUrlState = useState<string | null>(null);
   const deepLinkUrl = deepLinkUrlState[0];
   const [loading, setLoading] = useState<boolean>(false);
+  // Track the current profile picture URL to delete it when updating
+  const [currentProfilePictureUrl, setCurrentProfilePictureUrl] = useState<string | null>(null);
 
   // Auto-cycle feature temporarily disabled - will implement later
   // const [selectedInterval, setSelectedInterval] = useState<'daily' | 'weekly' | 'monthly'>('daily');
@@ -136,9 +138,40 @@ export default function ColorFrame({ context }: ColorFrameProps) {
         console.log('Neynar sign-in success:', data);
         // Store the signer UUID for API calls
         setNeynarSignerUuid(data.signer_uuid);
+        
+        // Fetch the user's current profile picture URL
+        if (data.user.fid) {
+          fetchUserProfilePicture(data.user.fid);
+        }
       });
     }
   }, [isInFrame, setNeynarSignerUuid]);
+
+  // Function to fetch the current profile picture URL
+  const fetchUserProfilePicture = async (fid: number) => {
+    try {
+      const toastId = toast.loading("Fetching current profile...");
+      
+      // Call the Neynar API to get the user profile
+      const response = await fetch(`/api/get-user-profile?fid=${fid}`);
+      
+      if (!response.ok) {
+        throw new Error('Failed to fetch user profile');
+      }
+      
+      const data = await response.json();
+      
+      if (data.user && data.user.pfp_url) {
+        console.log('Current profile picture URL:', data.user.pfp_url);
+        setCurrentProfilePictureUrl(data.user.pfp_url);
+      }
+      
+      toast.dismiss(toastId);
+    } catch (error) {
+      console.error('Error fetching profile picture:', error);
+      // Don't show an error toast as this is not critical
+    }
+  };
 
   // Function to connect with Neynar
   const connectWithNeynar = () => {
@@ -158,18 +191,17 @@ export default function ColorFrame({ context }: ColorFrameProps) {
     const toastId = toast.loading("Connecting with Neynar...");
     
     // Re-initialize the SIWN flow to ensure the button exists
-    const initialized = initializeSignInWithNeynar((data) => {
+    initializeSignInWithNeynar((data) => {
       console.log('Neynar sign-in success data:', data);
       setNeynarSignerUuid(data.signer_uuid);
       toast.dismiss(toastId);
       toast.success(`Connected with Farcaster as ${data.user.username}!`);
+      
+      // Fetch the user's current profile picture URL
+      if (data.user.fid) {
+        fetchUserProfilePicture(data.user.fid);
+      }
     });
-    
-    if (!initialized) {
-      toast.dismiss(toastId);
-      toast.error("Failed to initialize Neynar sign-in. Please try again.");
-      return;
-    }
     
     // Wait for script to load and initialize before clicking
     // Using a slightly longer timeout to ensure everything is ready
@@ -409,6 +441,7 @@ export default function ColorFrame({ context }: ColorFrameProps) {
           fid: context.user.fid,
           pfp: uploadData.url,
           signerUuid: neynarSignerUuid,
+          previousPfp: currentProfilePictureUrl, // Send the current profile picture URL to delete it
         }),
       });
       
@@ -420,6 +453,9 @@ export default function ColorFrame({ context }: ColorFrameProps) {
       }
       
       console.log('Profile picture update result:', pfpResult);
+      
+      // Update the current profile picture URL
+      setCurrentProfilePictureUrl(uploadData.url);
       
       toast.dismiss(toastId);
       toast.success('Profile picture updated successfully!');
