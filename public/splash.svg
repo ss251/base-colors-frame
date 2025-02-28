@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200">
+  <rect width="200" height="200" fill="#1E40AF" />
+  
+  <!-- Grid of color squares -->
+  <g id="colorGrid">
+    <rect x="40" y="40" width="30" height="30" fill="#FF5733" />
+    <rect x="85" y="40" width="30" height="30" fill="#33FF57" />
+    <rect x="130" y="40" width="30" height="30" fill="#3357FF" />
+    
+    <rect x="40" y="85" width="30" height="30" fill="#FF33A8" />
+    <rect x="85" y="85" width="30" height="30" fill="#33FFF0" />
+    <rect x="130" y="85" width="30" height="30" fill="#FFD433" />
+    
+    <rect x="40" y="130" width="30" height="30" fill="#DD33FF" />
+    <rect x="85" y="130" width="30" height="30" fill="#33FFAA" />
+    <rect x="130" y="130" width="30" height="30" fill="#9E33FF" />
+  </g>
+</svg> 
