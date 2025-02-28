@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { promises as fs } from 'fs';
-import path from 'path';
+import { put } from '@vercel/blob';
 import { createHash } from 'crypto';
 
 /**
@@ -15,42 +14,39 @@ interface RequestBody {
 
 /**
  * Handles POST requests for uploading SVG images
- * Saves them locally with a hash-based filename
+ * Uploads them to Vercel Blob storage with a hash-based filename
  * Returns the URL to access the uploaded image
  */
 export async function POST(request: NextRequest) {
   try {
     // Extract data from request
     const body = await request.json() as RequestBody;
-    const data = formatSvgData(body.data);
+    const svgData = formatSvgData(body.data);
     
     try {
-        // Create uploads directory if it doesn't exist
-        const uploadsDir = path.join(process.cwd(), 'public', 'uploads');
-        await fs.mkdir(uploadsDir, { recursive: true });
-        
-        // Create a unique filename based on content hash
-        const hash = createHash('md5').update(data).digest('hex');
-        const filename = `${hash}.svg`;
-        const filePath = path.join(uploadsDir, filename);
-        
-        // Write file to disk
-        await fs.writeFile(filePath, data);
-        
-        console.log(`Image saved to ${filePath}`);
-        
-        // Build the URL based on environment
-        const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000';
-        const imageUrl = `${baseUrl}/uploads/${filename}`;
-        
-        // Return success with the image URL
-        return NextResponse.json({ 
-            success: true,
-            url: imageUrl
-        });
+      // Create a unique filename based on content hash
+      const hash = createHash('md5').update(svgData).digest('hex');
+      const filename = `${hash}.svg`;
+      
+      // Convert SVG string to blob
+      const svgBlob = new Blob([svgData], { type: 'image/svg+xml' });
+      
+      // Upload to Vercel Blob storage
+      const { url } = await put(filename, svgBlob, {
+        access: 'public',
+        contentType: 'image/svg+xml',
+      });
+      
+      console.log(`Image uploaded to Vercel Blob: ${url}`);
+      
+      // Return success with the Blob URL
+      return NextResponse.json({ 
+        success: true,
+        url: url
+      });
     } catch (error) {
-        console.error('Error saving image:', error);
-        return NextResponse.json({ error: 'Failed to save image' }, { status: 500 });
+      console.error('Error uploading image to Vercel Blob:', error);
+      return NextResponse.json({ error: 'Failed to upload image' }, { status: 500 });
     }
   } catch (error) {
     console.error('Error processing image upload:', error);
