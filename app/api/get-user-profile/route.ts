@@ -1,5 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 
+// This route needs to be dynamic because it uses request.url and searchParams
+export const dynamic = 'force-dynamic';
+
 // Use environment variable for API key
 const NEYNAR_API_KEY = process.env.NEYNAR_API_KEY || '';
 
