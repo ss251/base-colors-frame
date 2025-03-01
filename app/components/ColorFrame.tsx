@@ -7,6 +7,7 @@ import QRCode from 'react-qr-code';
 import toast, { Toaster } from 'react-hot-toast';
 import frameSdkOriginal, { Context } from '@farcaster/frame-sdk';
 import { useAccount, useConnect } from 'wagmi';
+import { useNeynarContext, NeynarAuthButton, SIWN_variant } from '@neynar/react';
 
 import { fetchOwnedBaseColors, generateColorSvg, BaseColor } from '../utils/baseColors';
 import { frameSdk, ExtendedFrameSdk } from '@/lib/frame-sdk';
@@ -28,80 +29,16 @@ interface NeynarSignInData {
   };
 }
 
-// State atoms for signer/Neynar data
+// State atoms for user data
 const neynarSignerUuidAtom = atom<string | null>(null);
-
-// Add a function to initialize SIWN
-function initializeSignInWithNeynar(onSuccess: (data: NeynarSignInData) => void) {
-  // Check if we're in the browser environment
-  if (typeof window !== 'undefined') {
-    console.log('Initializing Sign In with Neynar...');
-    
-    // First, define the callback function - must be done before loading script
-    window.onNeynarSignInSuccess = onSuccess;
-    
-    // Create container div if needed
-    let container = document.getElementById('neynar_signin_container');
-    if (!container) {
-      container = document.createElement('div');
-      container.id = 'neynar_signin_container';
-      document.body.appendChild(container);
-    }
-    
-    // Clear any existing content
-    container.innerHTML = '';
-    
-    // Make the container visible but positioned in a fixed location where it can be clicked
-    // This is important - it needs to be visible and clickable, but not in the way
-    container.style.position = 'fixed';
-    container.style.top = '0';
-    container.style.left = '0';
-    container.style.opacity = '0.01'; // Almost invisible but still clickable
-    container.style.zIndex = '9999'; // High z-index to ensure it's clickable
-    
-    // Get client ID from environment variables
-    const clientId = process.env.NEXT_PUBLIC_NEYNAR_CLIENT_ID || '';
-    
-    // Create the button div according to Neynar docs
-    const buttonDiv = document.createElement('div');
-    buttonDiv.className = 'neynar_signin';
-    buttonDiv.setAttribute('data-client_id', clientId);
-    buttonDiv.setAttribute('data-success-callback', 'onNeynarSignInSuccess');
-    buttonDiv.setAttribute('data-theme', 'dark');
-    container.appendChild(buttonDiv);
-    
-    // Remove any existing script to avoid conflicts
-    const existingScript = document.querySelector('script[src*="neynarxyz.github.io/siwn"]');
-    if (existingScript) {
-      existingScript.remove();
-    }
-    
-    // Add the script
-    const script = document.createElement('script');
-    script.src = 'https://neynarxyz.github.io/siwn/raw/1.2.0/index.js';
-    script.async = true;
-    
-    script.onload = () => {
-      console.log('SIWN script loaded successfully');
-    };
-    
-    script.onerror = (error) => {
-      console.error('Failed to load SIWN script:', error);
-    };
-    
-    document.body.appendChild(script);
-    
-    return true;
-  }
-  
-  return false;
-}
 
 interface ColorFrameProps {
   context?: Context.FrameContext;
 }
 
 export default function ColorFrame({ context }: ColorFrameProps) {
+  // Use the Neynar context directly - make sure we only use properties that exist
+  const { user, isAuthenticated } = useNeynarContext();
   const [ownedColors, setOwnedColors] = useState<BaseColor[]>([]);
   const [selectedColor, setSelectedColor] = useState<string | null>(null);
   const [selectedColorName, setSelectedColorName] = useState<string | null>(null);
@@ -111,13 +48,19 @@ export default function ColorFrame({ context }: ColorFrameProps) {
   const [loading, setLoading] = useState<boolean>(false);
   // Track the current profile picture URL to delete it when updating
   const [currentProfilePictureUrl, setCurrentProfilePictureUrl] = useState<string | null>(null);
+  // Add a flag to prevent duplicate profile picture fetches
+  const [isFetchingProfile, setIsFetchingProfile] = useState<boolean>(false);
+  // Reference to store the profile toast ID
+  const profileToastIdRef = useRef<string | null>(null);
+  // Add a ref to track if we've already fetched the profile this session
+  const hasProfileFetchedRef = useRef<boolean>(false);
 
   // Auto-cycle feature temporarily disabled - will implement later
   // const [selectedInterval, setSelectedInterval] = useState<'daily' | 'weekly' | 'monthly'>('daily');
   // const [autoCycleEnabled, setAutoCycleEnabled] = useState<boolean>(false);
 
-  // We don't use the signer atom values directly but need the atom for state management
-  const [neynarSignerUuid, setNeynarSignerUuid] = useAtom(neynarSignerUuidAtom);
+  // Store the signer UUID for API calls
+  const [, setNeynarSignerUuid] = useAtom(neynarSignerUuidAtom);
   const [fetchingNFTs, setFetchingNFTs] = useState<boolean>(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [hasFetchedColors, setHasFetchedColors] = useState<boolean>(false);
@@ -125,6 +68,58 @@ export default function ColorFrame({ context }: ColorFrameProps) {
   // Access wagmi hooks for wallet connection
   const { address, isConnected } = useAccount();
   const { connect, connectors } = useConnect();
+
+  // Add a ref to track auth timeout
+  const authTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Create function to track authentication process
+  const startAuthTimeout = () => {
+    // Clear any existing timeout
+    if (authTimeoutRef.current) {
+      clearTimeout(authTimeoutRef.current);
+    }
+    
+    // Set a new timeout to show a message if auth takes too long
+    authTimeoutRef.current = setTimeout(() => {
+      if (!isAuthenticated) {
+        toast.error("Authentication is taking longer than expected. Please try again.");
+        console.log("Authentication timeout reached");
+      }
+      authTimeoutRef.current = null;
+    }, 30000); // 30 second timeout
+  };
+
+  // Clear timeout on component unmount
+  useEffect(() => {
+    return () => {
+      if (authTimeoutRef.current) {
+        clearTimeout(authTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  // Track when authentication state changes
+  useEffect(() => {
+    // If we become authenticated and have a timeout running, clear it
+    if (isAuthenticated && authTimeoutRef.current) {
+      clearTimeout(authTimeoutRef.current);
+      authTimeoutRef.current = null;
+      toast.success("Connected to Farcaster!");
+    }
+  }, [isAuthenticated]);
+
+  // Use signer UUID from Neynar context if available
+  useEffect(() => {
+    if (isAuthenticated && user?.signer_uuid && !isFetchingProfile && !hasProfileFetchedRef.current) {
+      console.log('Setting signer UUID from Neynar context:', user.signer_uuid);
+      setNeynarSignerUuid(user.signer_uuid);
+      
+      // Fetch the user's current profile picture URL if we have an FID
+      if (user.fid) {
+        fetchUserProfilePicture(user.fid);
+      }
+    }
+  }, [isAuthenticated, user?.signer_uuid, user?.fid]);
 
   // Check if we're in a Farcaster frame
   const isInFrame = useMemo(() => {
@@ -289,26 +284,25 @@ export default function ColorFrame({ context }: ColorFrameProps) {
     fetchColors();
   }, [address, isConnected, hasFetchedColors, fetchingNFTs]);
 
-  // Initialize SIWN on component mount
-  useEffect(() => {
-    if (isInFrame) {
-      initializeSignInWithNeynar((data) => {
-        console.log('Neynar sign-in success:', data);
-        // Store the signer UUID for API calls
-        setNeynarSignerUuid(data.signer_uuid);
-        
-        // Fetch the user's current profile picture URL
-        if (data.user.fid) {
-          fetchUserProfilePicture(data.user.fid);
-        }
-      });
-    }
-  }, [isInFrame, setNeynarSignerUuid]);
-
   // Function to fetch the current profile picture URL
   const fetchUserProfilePicture = async (fid: number) => {
+    // Return early if already fetching or if we've already fetched successfully
+    if (isFetchingProfile || hasProfileFetchedRef.current) {
+      console.log('Already fetching profile or profile already fetched, skipping duplicate call');
+      return;
+    }
+
+    setIsFetchingProfile(true);
+    
+    // Clear any existing toast
+    if (profileToastIdRef.current) {
+      toast.dismiss(profileToastIdRef.current);
+      profileToastIdRef.current = null;
+    }
+    
     try {
       const toastId = toast.loading("Fetching current profile...");
+      profileToastIdRef.current = toastId;
       
       // Call the Neynar API to get the user profile
       const response = await fetch(`/api/get-user-profile?fid=${fid}`);
@@ -322,72 +316,25 @@ export default function ColorFrame({ context }: ColorFrameProps) {
       if (data.user && data.user.pfp_url) {
         console.log('Current profile picture URL:', data.user.pfp_url);
         setCurrentProfilePictureUrl(data.user.pfp_url);
+        // Mark as successfully fetched
+        hasProfileFetchedRef.current = true;
       }
       
       toast.dismiss(toastId);
+      profileToastIdRef.current = null;
     } catch (error) {
       console.error('Error fetching profile picture:', error);
-      // Don't show an error toast as this is not critical
+      // Dismiss any active toast
+      if (profileToastIdRef.current) {
+        toast.dismiss(profileToastIdRef.current);
+        profileToastIdRef.current = null;
+      }
+    } finally {
+      setIsFetchingProfile(false);
     }
   };
 
-  // Function to connect with Neynar
-  const connectWithNeynar = () => {
-    // Check if we're in a Farcaster frame
-    if (!isInFrame) {
-      toast.error("This feature is only available in a Farcaster frame");
-      return;
-    }
-
-    // If we already have a Neynar signer UUID, we're connected
-    if (neynarSignerUuid) {
-      toast.success("Already connected with Neynar");
-      return;
-    }
-    
-    console.log("Attempting to connect with Neynar...");
-    const toastId = toast.loading("Connecting with Neynar...");
-    
-    // Re-initialize the SIWN flow to ensure the button exists
-    initializeSignInWithNeynar((data) => {
-      console.log('Neynar sign-in success data:', data);
-      setNeynarSignerUuid(data.signer_uuid);
-      toast.dismiss(toastId);
-      toast.success(`Connected with Farcaster as ${data.user.username}!`);
-      
-      // Fetch the user's current profile picture URL
-      if (data.user.fid) {
-        fetchUserProfilePicture(data.user.fid);
-      }
-    });
-    
-    // Wait for script to load and initialize before clicking
-    // Using a slightly longer timeout to ensure everything is ready
-    setTimeout(() => {
-      // Try to find the button after initialization
-      const siwnButton = document.querySelector('.neynar_signin button') as HTMLElement;
-      console.log("SIWN button element found:", !!siwnButton);
-      
-      if (siwnButton) {
-        // Directly click the actual button element rendered by the script
-        siwnButton.click();
-        console.log("SIWN button clicked");
-      } else {
-        // Try the container as fallback
-        const container = document.querySelector('.neynar_signin') as HTMLElement;
-        if (container) {
-          container.click();
-          console.log("SIWN container clicked as fallback");
-        } else {
-          toast.dismiss(toastId);
-          toast.error("Couldn't find the Neynar sign-in button. Please reload the page and try again.");
-          console.error("SIWN elements not found in DOM");
-        }
-      }
-    }, 300); // Increase timeout to ensure script has time to initialize
-  };
-
-  // Function to set profile picture using Neynar
+  // Function to update profile picture using Neynar
   const updateProfilePicture = async () => {
     if (!context?.user?.fid) {
       toast.error('FID not available, cannot update profile picture');
@@ -400,9 +347,8 @@ export default function ColorFrame({ context }: ColorFrameProps) {
     }
     
     // Check if we have a Neynar signer UUID, if not connect first
-    if (!neynarSignerUuid) {
+    if (!isAuthenticated || !user?.signer_uuid) {
       toast.error('Please connect with Farcaster first');
-      connectWithNeynar();
       return;
     }
     
@@ -446,7 +392,7 @@ export default function ColorFrame({ context }: ColorFrameProps) {
         body: JSON.stringify({
           fid: context.user.fid,
           pfp: uploadData.url,
-          signerUuid: neynarSignerUuid,
+          signerUuid: user.signer_uuid, // Use the signer UUID directly from Neynar context
           previousPfp: currentProfilePictureUrl, // Send the current profile picture URL to delete it
         }),
       });
@@ -476,6 +422,46 @@ export default function ColorFrame({ context }: ColorFrameProps) {
       setLoading(false);
     }
   };
+
+  // Check for stored authentication on component mount
+  useEffect(() => {
+    try {
+      // Skip this check if already authenticated
+      if (isAuthenticated) {
+        return;
+      }
+      
+      // Check if we have authentication data in localStorage
+      const hasAuthSuccess = window.localStorage.getItem('neynar_auth_success') === 'true';
+      const storedAuthData = window.localStorage.getItem('neynar_auth_data');
+      
+      if (hasAuthSuccess && storedAuthData) {
+        console.log('Found stored authentication data');
+        try {
+          const authData = JSON.parse(storedAuthData);
+          if (authData?.user?.fid) {
+            console.log('Attempting to hydrate authentication from storage, FID:', authData.user.fid);
+            // We can't automatically restore the auth session, but we can show a message
+            toast.success('Please click Connect with Farcaster to reconnect your session', {
+              duration: 5000,
+              style: {
+                background: '#3b82f6', // Blue-500
+                color: '#ffffff'
+              },
+              icon: '📝'
+            });
+          }
+        } catch (e) {
+          console.error('Error parsing stored auth data:', e);
+          // Clear invalid data
+          window.localStorage.removeItem('neynar_auth_success');
+          window.localStorage.removeItem('neynar_auth_data');
+        }
+      }
+    } catch (error) {
+      console.error('Error checking stored authentication:', error);
+    }
+  }, [isAuthenticated]);
 
   if (!isInFrame) {
     return (
@@ -652,16 +638,48 @@ export default function ColorFrame({ context }: ColorFrameProps) {
             {/* Farcaster connection */}
             {ownedColors.length > 0 && (
               <div className="bg-[#0C1428] rounded-xl p-5 mb-3">
-                {!neynarSignerUuid ? (
+                {!isAuthenticated ? (
                   <>
                     <h3 className="text-xl font-medium mb-3 text-white">Connect Farcaster</h3>
-                    <button
-                      className="w-full bg-blue-600 text-white py-3 px-4 rounded-lg font-medium hover:bg-blue-700 transition-all"
-                      onClick={connectWithNeynar}
-                      disabled={loading}
-                    >
-                      Connect with Farcaster
-                    </button>
+                    <p className="text-slate-300 mb-4 text-sm">
+                      Connect your Farcaster account to update your profile picture.
+                    </p>
+                    <div className="w-full">
+                      <NeynarAuthButton 
+                        variant={SIWN_variant.NEYNAR} 
+                        style={{
+                          width: '100%',
+                          padding: '12px 16px',
+                          borderRadius: '8px',
+                          backgroundColor: '#2563EB', // Blue-600 from Tailwind
+                          color: 'white',
+                          fontWeight: '500',
+                          border: 'none',
+                          cursor: 'pointer',
+                          fontSize: '16px',
+                          transition: 'background-color 0.2s ease',
+                        }}
+                        onMouseOver={(e) => {
+                          e.currentTarget.style.backgroundColor = '#1D4ED8'; // Blue-700 from Tailwind
+                        }}
+                        onMouseOut={(e) => {
+                          e.currentTarget.style.backgroundColor = '#2563EB'; // Blue-600 from Tailwind
+                        }}
+                        onClick={() => {
+                          console.log("NeynarAuthButton clicked");
+                          toast.loading("Connecting to Farcaster...");
+                          startAuthTimeout(); // Start the authentication timeout
+                        }}
+                      />
+                      <div className="mt-3 text-xs text-slate-400">
+                        <p>Having trouble? Try these steps:</p>
+                        <ol className="list-decimal list-inside mt-1 space-y-1">
+                          <li>Make sure pop-ups are allowed in your browser</li>
+                          <li>If using a mobile device, ensure you&apos;re in the Warpcast app</li>
+                          <li>Refresh the page and try again</li>
+                        </ol>
+                      </div>
+                    </div>
                   </>
                 ) : (
                   <>
@@ -685,6 +703,12 @@ export default function ColorFrame({ context }: ColorFrameProps) {
                         : "Set as Profile Picture"
                       }
                     </button>
+                    
+                    <div className="mt-2 text-center">
+                      <p className="text-slate-400 text-xs">
+                        Using Farcaster account with username: {user?.username || 'Unknown'}
+                      </p>
+                    </div>
                     
                     {errorMessage && (
                       <div className="p-3 mt-3 bg-red-500/10 border border-red-500/30 rounded-lg text-red-400 text-xs">

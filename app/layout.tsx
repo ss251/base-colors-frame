@@ -2,6 +2,8 @@ import type { Metadata } from "next";
 import { Inter } from "next/font/google";
 import "./globals.css";
 import { WagmiProvider } from "./providers/WagmiProvider";
+import NeynarProvider from "./providers/NeynarProvider";
+import "@neynar/react/dist/style.css"; // Import Neynar styles
 
 const inter = Inter({ subsets: ["latin"] });
 
@@ -46,7 +48,9 @@ export default function RootLayout({
     <html lang="en">
       <body className={inter.className}>
         <WagmiProvider>
-          {children}
+          <NeynarProvider>
+            {children}
+          </NeynarProvider>
         </WagmiProvider>
       </body>
     </html>
