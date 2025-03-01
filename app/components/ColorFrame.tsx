@@ -839,13 +839,6 @@ export default function ColorFrame({ context }: ColorFrameProps) {
       const debugResponse = await fetch(`/api/neynar/signer-debug?signer_uuid=${managedSigner.signer_uuid}`);
       const debugData = await debugResponse.json();
       
-      // Now get the standard formatted signer data
-      const response = await fetch(`/api/neynar/signer-status?signer_uuid=${managedSigner.signer_uuid}`);
-      
-      if (!response.ok) {
-        throw new Error(`Failed to get status: ${response.statusText}`);
-      }
-      
       // The raw API response should be available in debugData.parsedResponse
       // Let's analyze the correct path to the status
       let correctedStatus = 'unknown';
@@ -859,6 +852,13 @@ export default function ColorFrame({ context }: ColorFrameProps) {
         // For some versions where status is at the top level
         correctedStatus = debugData.parsedResponse.status;
         correctedFid = debugData.parsedResponse.fid;
+      }
+      
+      // Make sure we stop any existing polling
+      if (signerCheckIntervalRef.current) {
+        clearInterval(signerCheckIntervalRef.current);
+        signerCheckIntervalRef.current = null;
+        setIsCheckingSigner(false);
       }
       
       // Manual override: Always use the status from the raw API response
@@ -875,7 +875,7 @@ export default function ColorFrame({ context }: ColorFrameProps) {
       localStorage.setItem('neynar_auth_data', JSON.stringify(correctedSigner));
       
       // Set the signer UUID for API calls if status is approved
-      if (correctedSigner.status === 'approved') {
+      if (correctedStatus === 'approved') {
         setNeynarSignerUuid(correctedSigner.signer_uuid);
         
         // If we have an FID, fetch the user's profile picture
@@ -884,8 +884,14 @@ export default function ColorFrame({ context }: ColorFrameProps) {
         }
         
         toast.success('Connection verified!');
+      } else if (correctedStatus === 'pending_approval') {
+        // Only start polling if the status is actually pending
+        toast.success('Connection is waiting for approval');
+        
+        // Only restart polling if the status is actually pending
+        startSignerApprovalPolling(correctedSigner.signer_uuid);
       } else {
-        toast.success(`Connection status: ${correctedSigner.status === 'pending_approval' ? 'waiting for approval' : correctedSigner.status}`);
+        toast.success(`Connection status: ${correctedStatus}`);
       }
     } catch (error) {
       console.error('Error forcing signer status:', error);
@@ -919,15 +925,6 @@ export default function ColorFrame({ context }: ColorFrameProps) {
       const debugResponse = await fetch(`/api/neynar/signer-debug?signer_uuid=${managedSigner.signer_uuid}`);
       const debugData = await debugResponse.json();
       
-      // Then get the standard API response
-      const response = await fetch(`/api/neynar/signer-status?signer_uuid=${managedSigner.signer_uuid}`);
-      
-      if (!response.ok) {
-        throw new Error(`Failed to refresh status: ${response.statusText}`);
-      }
-      
-      const freshSigner = await response.json();
-      
       // Extract the correct status from the raw API response
       let correctStatus = 'unknown';
       let correctFid = null;
@@ -942,14 +939,19 @@ export default function ColorFrame({ context }: ColorFrameProps) {
         correctFid = debugData.parsedResponse.fid;
       }
       
+      // Make sure we stop any existing polling
+      if (signerCheckIntervalRef.current) {
+        clearInterval(signerCheckIntervalRef.current);
+        signerCheckIntervalRef.current = null;
+        setIsCheckingSigner(false);
+      }
+      
       // Create an updated signer with the correct status
       const updatedSigner = {
         ...managedSigner,
-        // Preserve any other fields from the API response
-        ...freshSigner,
-        // Make sure our corrected values take precedence - no duplicate properties
+        // Use the correctly extracted status and FID
         status: correctStatus,
-        fid: correctFid || freshSigner.fid || managedSigner.fid,
+        fid: correctFid || managedSigner.fid,
       };
       
       // Update the managed signer with the fresh data
@@ -968,8 +970,13 @@ export default function ColorFrame({ context }: ColorFrameProps) {
         if (updatedSigner.fid) {
           fetchUserProfilePicture(updatedSigner.fid);
         }
+      } else if (correctStatus === 'pending_approval') {
+        toast.success('Connection is waiting for approval');
+        
+        // Only restart polling if the status is actually pending
+        startSignerApprovalPolling(updatedSigner.signer_uuid);
       } else {
-        toast.success(`Connection status: ${correctStatus === 'pending_approval' ? 'waiting for approval' : correctStatus}`);
+        toast.success(`Connection status: ${correctStatus}`);
       }
     } catch (error) {
       console.error('Error refreshing signer status:', error);
@@ -990,31 +997,74 @@ export default function ColorFrame({ context }: ColorFrameProps) {
             const signer = JSON.parse(storedAuthData) as ManagedSigner;
             console.log('Found stored signer:', signer);
             
-            // If we have a signer_uuid but strange/unknown status, double check with API
-            if (signer.signer_uuid && (signer.status === 'unknown' || !signer.status)) {
-              // Check with API to get the actual status
+            // Always set the current stored state first, to avoid UI flicker
+            setManagedSigner(signer);
+            
+            // If we have a signer_uuid, always verify status with API in production
+            if (signer.signer_uuid) {
+              // Always check with API to get the actual status
               try {
-                const response = await fetch(`/api/neynar/signer-status?signer_uuid=${signer.signer_uuid}`);
+                const response = await fetch(`/api/neynar/signer-debug?signer_uuid=${signer.signer_uuid}`);
                 if (response.ok) {
-                  const apiSigner = await response.json();
-                  console.log('API check for stored signer:', apiSigner);
+                  const debugData = await response.json();
+                  console.log('Debug API check for stored signer:', debugData);
                   
-                  // Use API data to override local storage status if possible
-                  if (apiSigner.status) {
-                    signer.status = apiSigner.status;
+                  // Extract the correct status and FID from raw API response
+                  let apiStatus = 'unknown';
+                  let apiFid = null;
+                  
+                  if (debugData?.parsedResponse?.result?.status) {
+                    // For v2 API where status is inside result
+                    apiStatus = debugData.parsedResponse.result.status;
+                    apiFid = debugData.parsedResponse.result.fid;
+                  } else if (debugData?.parsedResponse?.status) {
+                    // For some versions where status is at the top level
+                    apiStatus = debugData.parsedResponse.status;
+                    apiFid = debugData.parsedResponse.fid;
                   }
-                  if (apiSigner.fid) {
-                    signer.fid = apiSigner.fid;
+                  
+                  console.log('API status extracted:', apiStatus, 'API FID:', apiFid);
+                  
+                  // Create an updated signer with API data
+                  const updatedSigner = {
+                    ...signer,
+                    status: apiStatus,
+                    fid: apiFid || signer.fid
+                  };
+                  
+                  // Update the state with the verified data
+                  setManagedSigner(updatedSigner);
+                  
+                  // Update localStorage
+                  localStorage.setItem('neynar_auth_data', JSON.stringify(updatedSigner));
+                  
+                  // Handle signer based on verified status
+                  if (apiStatus === 'approved') {
+                    // Set the signer UUID for API calls
+                    setNeynarSignerUuid(updatedSigner.signer_uuid);
+                    
+                    // Only fetch profile if we have an FID
+                    if (updatedSigner.fid) {
+                      fetchUserProfilePicture(updatedSigner.fid);
+                    }
+                    
+                    // Do NOT start polling if already approved
+                    console.log('Signer is already approved, not starting polling');
+                  } else if (apiStatus === 'pending_approval') {
+                    // Only start polling if the status is actually pending
+                    startSignerApprovalPolling(updatedSigner.signer_uuid);
                   }
+                  
+                  // Don't proceed to the old code below
+                  return;
                 }
               } catch (apiError) {
                 console.error('Error checking API for signer status:', apiError);
-                // Continue with existing data if API check fails
+                // Fall back to the original stored data if API check fails
               }
             }
             
-            // Now update state with potentially corrected data
-            setManagedSigner(signer);
+            // This is a fallback if the API check above fails
             
             // If the signer is pending approval, start polling
             if (signer.status === 'pending_approval' && signer.signer_uuid) {
