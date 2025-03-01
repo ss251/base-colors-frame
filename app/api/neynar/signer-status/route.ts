@@ -1,5 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 
+// This route needs to be dynamic because it uses searchParams
+export const dynamic = 'force-dynamic';
+
 // Define an interface for the signer info response
 interface SignerInfo {
   signer_uuid: string;
