@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@farcaster/frame-sdk": "^0.0.29",
+    "@farcaster/hub-nodejs": "^0.12.7",
     "@neynar/nodejs-sdk": "^2.17.0",
     "@neynar/react": "^0.9.7",
     "@pigment-css/react": "0.0.9",
