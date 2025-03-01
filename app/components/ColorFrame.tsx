@@ -28,7 +28,6 @@ interface NeynarSignInData {
 }
 
 // State atoms for signer/Neynar data
-const signerAtom = atom<string | null>(null);
 const neynarSignerUuidAtom = atom<string | null>(null);
 
 // Add a function to initialize SIWN
@@ -116,7 +115,6 @@ export default function ColorFrame({ context }: ColorFrameProps) {
   // const [autoCycleEnabled, setAutoCycleEnabled] = useState<boolean>(false);
 
   // We don't use the signer atom values directly but need the atom for state management
-  useAtom(signerAtom);
   const [neynarSignerUuid, setNeynarSignerUuid] = useAtom(neynarSignerUuidAtom);
   const [fetchingNFTs, setFetchingNFTs] = useState<boolean>(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
