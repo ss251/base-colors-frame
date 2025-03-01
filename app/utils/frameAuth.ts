@@ -6,14 +6,17 @@ export interface SignedMessageResponse {
 
 /**
  * Gets authentication from a frame context
- * This uses the secure Farcaster connection approach
+ * This uses the newer managed signers approach
  */
 export function getFrameAuthentication(fid: number) {
   return {
     // Function to sign messages using the frame context
     signMessage: async (message: string): Promise<SignedMessageResponse | null> => {
       try {
-        // First check if we have a stored connection data for this FID
+        // Here we would use Neynar's managed signers
+        // This is a simpler approach than using the frame's signMessage directly
+        
+        // First check if we have a stored signer UUID for this FID
         const storedData = localStorage.getItem(`neynar_auth_data`);
         if (!storedData) {
           console.error('No authentication data found');
@@ -25,11 +28,11 @@ export function getFrameAuthentication(fid: number) {
         const signerUuid = authData?.signer_uuid;
         
         if (!signerUuid) {
-          console.error('No connection ID found in auth data');
+          console.error('No signer UUID found in auth data');
           return null;
         }
         
-        // Make a request to sign the message with our authenticated connection
+        // Make a request to sign the message with our managed signer
         const response = await fetch('/api/neynar/sign-message', {
           method: 'POST',
           headers: {

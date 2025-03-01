@@ -40,7 +40,7 @@ export async function GET(request: NextRequest) {
     try {
       parsedResponse = JSON.parse(rawResponseText);
     } catch (e) {
-      console.error('Failed to parse response as JSON:', e);
+      console.error('Failed to parse response as JSON');
     }
     
     // Return all the debug information

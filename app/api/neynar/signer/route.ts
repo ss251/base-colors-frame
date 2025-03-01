@@ -1,9 +1,6 @@
 import { NextResponse, NextRequest } from "next/server";
 import neynarClient from "@/lib/neynarClient";
 
-// This route needs to be dynamic because it uses searchParams
-export const dynamic = 'force-dynamic';
-
 export async function GET(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url);

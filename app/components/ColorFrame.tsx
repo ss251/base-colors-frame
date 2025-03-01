@@ -329,7 +329,7 @@ export default function ColorFrame({ context }: ColorFrameProps) {
   // Function to update profile picture using Neynar
   const updateProfilePicture = async () => {
     if (!context?.user?.fid) {
-      toast.error('Unable to identify your account. Please try reconnecting.');
+      toast.error('FID not available, cannot update profile picture');
       return;
     }
     
@@ -340,7 +340,7 @@ export default function ColorFrame({ context }: ColorFrameProps) {
     
     // Check if we have a managed signer that is approved
     if (managedSigner?.status !== 'approved' || !managedSigner?.signer_uuid) {
-      toast.error('Please connect your Farcaster account first');
+      toast.error('Please connect with Farcaster first using the managed signer');
       return;
     }
     
@@ -354,6 +354,7 @@ export default function ColorFrame({ context }: ColorFrameProps) {
     try {
       // Generate SVG for the selected color
       const svgImage = generateColorSvg(selectedColor);
+      console.log('Generated SVG image with length:', svgImage.length);
       
       // First, upload the image to our server
       toast.dismiss(toastId);
@@ -371,10 +372,13 @@ export default function ColorFrame({ context }: ColorFrameProps) {
       }
       
       const uploadData = await uploadResponse.json();
+      console.log('Image uploaded successfully:', uploadData);
       
       // Now set the profile picture using the Neynar signer and the uploaded image URL
       toast.dismiss(toastId);
       toastId = toast.loading('Setting your new profile picture...');
+      
+      console.log('Sending request to change PFP with FID:', context.user.fid);
       
       // Use our updated API endpoint with Neynar signer UUID
       const changePfpResponse = await fetch('/api/change-pfp', {
@@ -394,6 +398,8 @@ export default function ColorFrame({ context }: ColorFrameProps) {
       if (!changePfpResponse.ok) {
         throw new Error(`Failed to update profile picture: ${pfpResult.error || pfpResult.message || changePfpResponse.statusText}`);
       }
+      
+      console.log('Profile picture update result:', pfpResult);
       
       // Update the current profile picture URL
       setCurrentProfilePictureUrl(uploadData.url);
@@ -463,7 +469,7 @@ export default function ColorFrame({ context }: ColorFrameProps) {
     if (isCreatingSigner) return;
     
     setIsCreatingSigner(true);
-    const toastId = toast.loading("Connecting to Farcaster...");
+    const toastId = toast.loading("Creating a new signer...");
     
     try {
       // Clear any existing intervals to prevent state conflicts
@@ -484,10 +490,11 @@ export default function ColorFrame({ context }: ColorFrameProps) {
       
       if (!response.ok) {
         const errorData = await response.json();
-        throw new Error(`Connection failed: ${JSON.stringify(errorData)}`);
+        throw new Error(`Failed to create signer: ${JSON.stringify(errorData)}`);
       }
       
       const signer = await response.json();
+      console.log('Created new managed signer:', signer);
       
       // Set the initial signer state
       setManagedSigner({
@@ -501,13 +508,15 @@ export default function ColorFrame({ context }: ColorFrameProps) {
       localStorage.setItem('neynar_auth_data', JSON.stringify(signer));
       localStorage.setItem('neynar_auth_success', 'true');
       
-      toast.success("Connection initialized!");
+      toast.success("Signer created successfully!");
       
       // We need to register the signer to get an approval URL
       try {
+        console.log('Auto-registering newly created signer...');
+        
         // Update toast to show registration in progress
         toast.dismiss(toastId);
-        const registerToastId = toast.loading("Preparing approval link...");
+        const registerToastId = toast.loading("Getting approval URL...");
         
         const registerResponse = await fetch('/api/neynar/register-signer', {
           method: 'POST',
@@ -522,7 +531,7 @@ export default function ColorFrame({ context }: ColorFrameProps) {
         if (!registerResponse.ok) {
           console.error('Error auto-registering new signer:', await registerResponse.text());
           toast.dismiss(registerToastId);
-          toast.error("Could not get approval link automatically. Will try again in a moment.");
+          toast.error("Could not get approval URL automatically. Will try again in a moment.");
           
           // We can still poll with the original UUID
           startSignerApprovalPolling(signer.signer_uuid);
@@ -530,6 +539,7 @@ export default function ColorFrame({ context }: ColorFrameProps) {
         }
         
         const registeredSigner = await registerResponse.json();
+        console.log('Auto-registered signer result:', registeredSigner);
         
         // Dismiss the registration toast
         toast.dismiss(registerToastId);
@@ -554,22 +564,22 @@ export default function ColorFrame({ context }: ColorFrameProps) {
           
           // Start polling with the new signer UUID
           startSignerApprovalPolling(registeredSigner.signer_uuid);
-          toast.success("Approval link ready! Scan the QR code to complete connection.");
+          toast.success("Registration URL ready! Scan the QR code to approve.");
         } else {
-          toast.error("Could not get approval link, trying alternative method...");
+          toast.error("Could not get approval URL, trying alternative method...");
           // Fall back to polling with the original UUID
           startSignerApprovalPolling(signer.signer_uuid);
         }
       } catch (regError) {
         console.error('Error in auto-registration:', regError);
-        toast.error("Connection error. Will try again automatically.");
+        toast.error("Registration error. Will try again automatically.");
         // Fall back to normal polling
         startSignerApprovalPolling(signer.signer_uuid);
       }
     } catch (error) {
       console.error('Error creating managed signer:', error);
-      toast.error(`Connection failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
-      setErrorMessage(error instanceof Error ? error.message : 'Connection failed');
+      toast.error(`Failed to create signer: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      setErrorMessage(error instanceof Error ? error.message : 'Failed to create signer');
     } finally {
       toast.dismiss(toastId);
       setIsCreatingSigner(false);
@@ -579,11 +589,11 @@ export default function ColorFrame({ context }: ColorFrameProps) {
   // Function to manually trigger signer registration
   const triggerManualRegistration = async () => {
     if (!managedSigner?.signer_uuid) {
-      toast.error("No connection available");
+      toast.error("No signer UUID available");
       return;
     }
     
-    const toastId = toast.loading("Getting approval link...");
+    const toastId = toast.loading("Registering signer...");
     
     try {
       // Clear any error state
@@ -602,11 +612,12 @@ export default function ColorFrame({ context }: ColorFrameProps) {
       if (!response.ok) {
         const errorText = await response.text();
         console.error('Manual registration error:', errorText);
-        toast.error("Failed to get approval link: " + errorText);
+        toast.error("Failed to register: " + errorText);
         return;
       }
       
       const data = await response.json();
+      console.log('Manual registration result:', data);
       
       if (data.signer_approval_url) {
         // Create an updated signer with all necessary fields
@@ -626,7 +637,7 @@ export default function ColorFrame({ context }: ColorFrameProps) {
         // Store the complete signer info
         localStorage.setItem('neynar_auth_data', JSON.stringify(updatedSigner));
         
-        toast.success("Successfully got approval link!");
+        toast.success("Successfully got approval URL!");
         
         // Restart polling with the new signer UUID
         // First clear any existing interval
@@ -637,11 +648,11 @@ export default function ColorFrame({ context }: ColorFrameProps) {
         
         startSignerApprovalPolling(data.signer_uuid);
       } else {
-        toast.error("No approval link returned");
+        toast.error("No approval URL returned");
       }
     } catch (error) {
       console.error('Error in manual registration:', error);
-      toast.error("Failed to get approval link: " + (error instanceof Error ? error.message : String(error)));
+      toast.error("Registration failed: " + (error instanceof Error ? error.message : String(error)));
     } finally {
       toast.dismiss(toastId);
     }
@@ -828,16 +839,28 @@ export default function ColorFrame({ context }: ColorFrameProps) {
   // Add a function to force the correct signer status based on API data
   const forceCorrectSignerStatus = async () => {
     if (!managedSigner?.signer_uuid) {
-      toast.error("No connection available");
+      toast.error("No signer UUID available to force update");
       return;
     }
     
-    const toastId = toast.loading("Checking connection status...");
+    const toastId = toast.loading("Force updating signer status...");
     
     try {
       // First, check with our debug endpoint to see raw API response
+      console.log("Fetching raw API debug info first...");
       const debugResponse = await fetch(`/api/neynar/signer-debug?signer_uuid=${managedSigner.signer_uuid}`);
       const debugData = await debugResponse.json();
+      console.log('DEBUG API response:', debugData);
+      
+      // Now get the standard formatted signer data
+      const response = await fetch(`/api/neynar/signer-status?signer_uuid=${managedSigner.signer_uuid}`);
+      
+      if (!response.ok) {
+        throw new Error(`Failed to get status from API: ${response.statusText}`);
+      }
+      
+      const apiSigner = await response.json();
+      console.log('API signer data:', apiSigner);
       
       // The raw API response should be available in debugData.parsedResponse
       // Let's analyze the correct path to the status
@@ -848,17 +871,12 @@ export default function ColorFrame({ context }: ColorFrameProps) {
         // For v2 API where status is inside result
         correctedStatus = debugData.parsedResponse.result.status;
         correctedFid = debugData.parsedResponse.result.fid;
+        console.log('Found status in result.status:', correctedStatus);
       } else if (debugData?.parsedResponse?.status) {
         // For some versions where status is at the top level
         correctedStatus = debugData.parsedResponse.status;
         correctedFid = debugData.parsedResponse.fid;
-      }
-      
-      // Make sure we stop any existing polling
-      if (signerCheckIntervalRef.current) {
-        clearInterval(signerCheckIntervalRef.current);
-        signerCheckIntervalRef.current = null;
-        setIsCheckingSigner(false);
+        console.log('Found status at top level:', correctedStatus);
       }
       
       // Manual override: Always use the status from the raw API response
@@ -868,6 +886,8 @@ export default function ColorFrame({ context }: ColorFrameProps) {
         fid: correctedFid || managedSigner.fid, // Keep FID from API or existing state
       };
       
+      console.log('Manually corrected signer:', correctedSigner);
+      
       // Update the state with corrected data
       setManagedSigner(correctedSigner);
       
@@ -875,7 +895,7 @@ export default function ColorFrame({ context }: ColorFrameProps) {
       localStorage.setItem('neynar_auth_data', JSON.stringify(correctedSigner));
       
       // Set the signer UUID for API calls if status is approved
-      if (correctedStatus === 'approved') {
+      if (correctedSigner.status === 'approved') {
         setNeynarSignerUuid(correctedSigner.signer_uuid);
         
         // If we have an FID, fetch the user's profile picture
@@ -883,19 +903,13 @@ export default function ColorFrame({ context }: ColorFrameProps) {
           fetchUserProfilePicture(correctedSigner.fid);
         }
         
-        toast.success('Connection verified!');
-      } else if (correctedStatus === 'pending_approval') {
-        // Only start polling if the status is actually pending
-        toast.success('Connection is waiting for approval');
-        
-        // Only restart polling if the status is actually pending
-        startSignerApprovalPolling(correctedSigner.signer_uuid);
+        toast.success('Status updated to approved!');
       } else {
-        toast.success(`Connection status: ${correctedStatus}`);
+        toast.success(`Status force updated to: ${correctedSigner.status}`);
       }
     } catch (error) {
       console.error('Error forcing signer status:', error);
-      toast.error(error instanceof Error ? error.message : 'Failed to verify connection status');
+      toast.error(error instanceof Error ? error.message : 'Failed to force update status');
     } finally {
       toast.dismiss(toastId);
     }
@@ -914,16 +928,28 @@ export default function ColorFrame({ context }: ColorFrameProps) {
   // Add a function to manually refresh the signer status from the API
   const refreshSignerStatus = async () => {
     if (!managedSigner?.signer_uuid) {
-      toast.error("No connection available to refresh");
+      toast.error("No signer UUID available to refresh");
       return;
     }
     
-    const toastId = toast.loading("Refreshing connection status...");
+    const toastId = toast.loading("Refreshing signer status...");
     
     try {
       // First check with our debug endpoint to understand the raw API response
+      console.log("Fetching raw API debug info for refresh...");
       const debugResponse = await fetch(`/api/neynar/signer-debug?signer_uuid=${managedSigner.signer_uuid}`);
       const debugData = await debugResponse.json();
+      console.log('DEBUG refresh API response:', debugData);
+      
+      // Then get the standard API response
+      const response = await fetch(`/api/neynar/signer-status?signer_uuid=${managedSigner.signer_uuid}`);
+      
+      if (!response.ok) {
+        throw new Error(`Failed to refresh status: ${response.statusText}`);
+      }
+      
+      const freshSigner = await response.json();
+      console.log('Manual refresh signer status:', freshSigner);
       
       // Extract the correct status from the raw API response
       let correctStatus = 'unknown';
@@ -933,25 +959,22 @@ export default function ColorFrame({ context }: ColorFrameProps) {
         // For v2 API where status is inside result
         correctStatus = debugData.parsedResponse.result.status;
         correctFid = debugData.parsedResponse.result.fid;
+        console.log('Refresh: Found status in result.status:', correctStatus);
       } else if (debugData?.parsedResponse?.status) {
         // For some versions where status is at the top level
         correctStatus = debugData.parsedResponse.status;
         correctFid = debugData.parsedResponse.fid;
-      }
-      
-      // Make sure we stop any existing polling
-      if (signerCheckIntervalRef.current) {
-        clearInterval(signerCheckIntervalRef.current);
-        signerCheckIntervalRef.current = null;
-        setIsCheckingSigner(false);
+        console.log('Refresh: Found status at top level:', correctStatus);
       }
       
       // Create an updated signer with the correct status
       const updatedSigner = {
         ...managedSigner,
-        // Use the correctly extracted status and FID
+        // Preserve any other fields from the API response
+        ...freshSigner,
+        // Make sure our corrected values take precedence - no duplicate properties
         status: correctStatus,
-        fid: correctFid || managedSigner.fid,
+        fid: correctFid || freshSigner.fid || managedSigner.fid,
       };
       
       // Update the managed signer with the fresh data
@@ -961,7 +984,7 @@ export default function ColorFrame({ context }: ColorFrameProps) {
       localStorage.setItem('neynar_auth_data', JSON.stringify(updatedSigner));
       
       if (correctStatus === 'approved') {
-        toast.success('Connection is active!');
+        toast.success('Signer is approved!');
         
         // Set the signer UUID for API calls
         setNeynarSignerUuid(updatedSigner.signer_uuid);
@@ -970,17 +993,12 @@ export default function ColorFrame({ context }: ColorFrameProps) {
         if (updatedSigner.fid) {
           fetchUserProfilePicture(updatedSigner.fid);
         }
-      } else if (correctStatus === 'pending_approval') {
-        toast.success('Connection is waiting for approval');
-        
-        // Only restart polling if the status is actually pending
-        startSignerApprovalPolling(updatedSigner.signer_uuid);
       } else {
-        toast.success(`Connection status: ${correctStatus}`);
+        toast.success(`Signer status refreshed: ${correctStatus}`);
       }
     } catch (error) {
       console.error('Error refreshing signer status:', error);
-      toast.error(error instanceof Error ? error.message : 'Failed to refresh connection status');
+      toast.error(error instanceof Error ? error.message : 'Failed to refresh signer status');
     } finally {
       toast.dismiss(toastId);
     }
@@ -997,74 +1015,31 @@ export default function ColorFrame({ context }: ColorFrameProps) {
             const signer = JSON.parse(storedAuthData) as ManagedSigner;
             console.log('Found stored signer:', signer);
             
-            // Always set the current stored state first, to avoid UI flicker
-            setManagedSigner(signer);
-            
-            // If we have a signer_uuid, always verify status with API in production
-            if (signer.signer_uuid) {
-              // Always check with API to get the actual status
+            // If we have a signer_uuid but strange/unknown status, double check with API
+            if (signer.signer_uuid && (signer.status === 'unknown' || !signer.status)) {
+              // Check with API to get the actual status
               try {
-                const response = await fetch(`/api/neynar/signer-debug?signer_uuid=${signer.signer_uuid}`);
+                const response = await fetch(`/api/neynar/signer-status?signer_uuid=${signer.signer_uuid}`);
                 if (response.ok) {
-                  const debugData = await response.json();
-                  console.log('Debug API check for stored signer:', debugData);
+                  const apiSigner = await response.json();
+                  console.log('API check for stored signer:', apiSigner);
                   
-                  // Extract the correct status and FID from raw API response
-                  let apiStatus = 'unknown';
-                  let apiFid = null;
-                  
-                  if (debugData?.parsedResponse?.result?.status) {
-                    // For v2 API where status is inside result
-                    apiStatus = debugData.parsedResponse.result.status;
-                    apiFid = debugData.parsedResponse.result.fid;
-                  } else if (debugData?.parsedResponse?.status) {
-                    // For some versions where status is at the top level
-                    apiStatus = debugData.parsedResponse.status;
-                    apiFid = debugData.parsedResponse.fid;
+                  // Use API data to override local storage status if possible
+                  if (apiSigner.status) {
+                    signer.status = apiSigner.status;
                   }
-                  
-                  console.log('API status extracted:', apiStatus, 'API FID:', apiFid);
-                  
-                  // Create an updated signer with API data
-                  const updatedSigner = {
-                    ...signer,
-                    status: apiStatus,
-                    fid: apiFid || signer.fid
-                  };
-                  
-                  // Update the state with the verified data
-                  setManagedSigner(updatedSigner);
-                  
-                  // Update localStorage
-                  localStorage.setItem('neynar_auth_data', JSON.stringify(updatedSigner));
-                  
-                  // Handle signer based on verified status
-                  if (apiStatus === 'approved') {
-                    // Set the signer UUID for API calls
-                    setNeynarSignerUuid(updatedSigner.signer_uuid);
-                    
-                    // Only fetch profile if we have an FID
-                    if (updatedSigner.fid) {
-                      fetchUserProfilePicture(updatedSigner.fid);
-                    }
-                    
-                    // Do NOT start polling if already approved
-                    console.log('Signer is already approved, not starting polling');
-                  } else if (apiStatus === 'pending_approval') {
-                    // Only start polling if the status is actually pending
-                    startSignerApprovalPolling(updatedSigner.signer_uuid);
+                  if (apiSigner.fid) {
+                    signer.fid = apiSigner.fid;
                   }
-                  
-                  // Don't proceed to the old code below
-                  return;
                 }
               } catch (apiError) {
                 console.error('Error checking API for signer status:', apiError);
-                // Fall back to the original stored data if API check fails
+                // Continue with existing data if API check fails
               }
             }
             
-            // This is a fallback if the API check above fails
+            // Now update state with potentially corrected data
+            setManagedSigner(signer);
             
             // If the signer is pending approval, start polling
             if (signer.status === 'pending_approval' && signer.signer_uuid) {
@@ -1270,8 +1245,8 @@ export default function ColorFrame({ context }: ColorFrameProps) {
             {/* Farcaster connection */}
             {ownedColors.length > 0 && (
               <div className="bg-[#0C1428] rounded-xl p-5 mb-3">
-                {/* Debug info - hidden by default */}
-                <div className="border border-gray-700 rounded p-2 mb-3 text-xs text-white hidden">
+                {/* Debug info - make visible by removing 'hidden' */}
+                <div className="border border-gray-700 rounded p-2 mb-3 text-xs text-white">
                   <p>Debug info:</p>
                   <p>isAuthenticated: {isAuthenticated ? 'true' : 'false'}</p>
                   <p>managedSigner?.status: {managedSigner?.status || 'null'}</p>
@@ -1299,7 +1274,7 @@ export default function ColorFrame({ context }: ColorFrameProps) {
                               <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
                               <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                             </svg>
-                            Connecting...
+                            Creating Signer...
                           </span>
                         ) : (
                           "Connect with Farcaster"
@@ -1318,9 +1293,9 @@ export default function ColorFrame({ context }: ColorFrameProps) {
                   </>
                 ) : managedSigner?.status === 'pending_approval' ? (
                   <>
-                    <h3 className="text-xl font-medium mb-3 text-white">Approve Connection</h3>
+                    <h3 className="text-xl font-medium mb-3 text-white">Approve Signer</h3>
                     <p className="text-slate-300 mb-4 text-sm">
-                      Scan this QR code with your phone or click the link to approve the connection.
+                      Scan this QR code with your phone or click the link to approve the signer.
                     </p>
                     <div className="flex flex-col items-center justify-center">
                       {managedSigner.signer_approval_url && (
@@ -1346,13 +1321,13 @@ export default function ColorFrame({ context }: ColorFrameProps) {
                       {!managedSigner.signer_approval_url && (
                         <div className="flex flex-col items-center my-4">
                           <p className="text-orange-400 text-sm mb-3">
-                            Waiting for approval link to be generated...
+                            Waiting for approval URL to be generated...
                           </p>
                           <button
                             className="py-2 px-4 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-all text-sm"
                             onClick={triggerManualRegistration}
                           >
-                            Get new approval link
+                            Try again
                           </button>
                         </div>
                       )}
@@ -1400,21 +1375,24 @@ export default function ColorFrame({ context }: ColorFrameProps) {
                 ) : (
                   <div className="p-4 text-center">
                     <p className="text-slate-300">
-                      Something went wrong with the Farcaster connection. Please try again.
+                      Something went wrong with authentication. Please try again.
+                    </p>
+                    <p className="text-xs text-red-400 mt-1">
+                      State: {JSON.stringify({auth: isAuthenticated, status: managedSigner?.status, fid: managedSigner?.fid})}
                     </p>
                     <div className="flex flex-col gap-2 mt-3">
                       <button
                         className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-all"
                         onClick={refreshSignerStatus}
                       >
-                        Refresh Connection
+                        Refresh Signer Status
                       </button>
                       
                       <button
                         className="px-4 py-2 bg-yellow-600 text-white rounded-lg hover:bg-yellow-700 transition-all"
                         onClick={forceCorrectSignerStatus}
                       >
-                        Verify Connection
+                        Force Correct Status
                       </button>
                       
                       <button
@@ -1429,7 +1407,7 @@ export default function ColorFrame({ context }: ColorFrameProps) {
                           createManagedSigner();
                         }}
                       >
-                        Start New Connection
+                        Create New Signer
                       </button>
                     </div>
                   </div>
