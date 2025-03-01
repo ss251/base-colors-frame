@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { Inter } from "next/font/google";
 import "./globals.css";
-import { WagmiProvider } from "./providers/WagmiProvider";
+import RainbowKitWrapper from "./providers/RainbowKitProvider";
 
 const inter = Inter({ subsets: ["latin"] });
 
@@ -45,9 +45,9 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body className={inter.className}>
-        <WagmiProvider>
+        <RainbowKitWrapper>
           {children}
-        </WagmiProvider>
+        </RainbowKitWrapper>
       </body>
     </html>
   );

@@ -38,11 +38,39 @@ export async function fetchOwnedBaseColors(ownerAddress: string): Promise<BaseCo
       image: {
         originalUrl: string;
       };
+      raw?: {
+        metadata?: {
+          attributes?: Array<{
+            trait_type: string;
+            value: string;
+          }>;
+        };
+      };
     }) => {
+      // Extract hex code from name (typically "#FFFFFF" format)
+      const hexCode = nft.name.startsWith('#') ? nft.name : `#${nft.name}`;
+      
+      // Try to find a human-readable color name in the attributes
+      let colorName = hexCode; // Default to hex code if no other name found
+      
+      // Check if we have raw metadata with attributes
+      if (nft.raw?.metadata?.attributes && Array.isArray(nft.raw.metadata.attributes)) {
+        // Look for a color name attribute that isn't just the hex code
+        const colorNameAttr = nft.raw.metadata.attributes.find((attr: { trait_type: string; value: string }) => 
+          (attr.trait_type === 'Color Name' || attr.trait_type === 'Name') && 
+          attr.value && 
+          !attr.value.match(/^[A-F0-9]{6}$/i) // Not just a hex code without #
+        );
+        
+        if (colorNameAttr) {
+          colorName = colorNameAttr.value;
+        }
+      }
+      
       return {
         tokenId: nft.tokenId,
-        name: nft.name,
-        colorValue: nft.name.startsWith('#') ? nft.name : `#${nft.name}`,
+        name: colorName, // Use the human-readable name if found
+        colorValue: hexCode, // Always use the hex code for the color value
         imageUrl: nft.image.originalUrl,
       };
     });
@@ -72,7 +100,6 @@ export function generateColorSvg(colorHex: string): string {
 
 /**
  * Schedule a profile picture update to cycle through Base Colors
- * This function would typically send a request to your backend to schedule updates
  */
 export async function scheduleProfileUpdates(
   fid: number,

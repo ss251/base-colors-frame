@@ -1,12 +1,13 @@
 'use client';
 
-import React, { useEffect, useState, useMemo } from 'react';
+import React, { useEffect, useState, useMemo, useRef } from 'react';
 import { useAtom } from 'jotai';
 import { atom } from 'jotai';
 import QRCode from 'react-qr-code';
 import toast, { Toaster } from 'react-hot-toast';
 import frameSdk, { Context } from '@farcaster/frame-sdk';
 import { useAccount, useConnect } from 'wagmi';
+import { ConnectButton } from '@rainbow-me/rainbowkit';
 
 import { fetchOwnedBaseColors, generateColorSvg, BaseColor } from '../utils/baseColors';
 // import { scheduleProfileUpdates } from '../utils/baseColors'; // Will be used when auto-cycle is implemented
@@ -103,6 +104,7 @@ interface ColorFrameProps {
 export default function ColorFrame({ context }: ColorFrameProps) {
   const [ownedColors, setOwnedColors] = useState<BaseColor[]>([]);
   const [selectedColor, setSelectedColor] = useState<string | null>(null);
+  const [selectedColorName, setSelectedColorName] = useState<string | null>(null);
   // We need deepLinkUrl for QR code functionality
   const deepLinkUrlState = useState<string | null>(null);
   const deepLinkUrl = deepLinkUrlState[0];
@@ -118,11 +120,27 @@ export default function ColorFrame({ context }: ColorFrameProps) {
   const [neynarSignerUuid, setNeynarSignerUuid] = useAtom(neynarSignerUuidAtom);
   const [fetchingNFTs, setFetchingNFTs] = useState<boolean>(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [hasFetchedColors, setHasFetchedColors] = useState<boolean>(false);
   
   // Access wagmi hooks for wallet connection
   const { address, isConnected } = useAccount();
   const { connect, connectors } = useConnect();
+  
+  // Auto connect to wallet
+  useEffect(() => {
+    // Only attempt auto-connect if not already connected
+    if (!isConnected && connectors.length > 0) {
+      // Find the injected connector (e.g., MetaMask) or use the first available
+      const injectedConnector = connectors.find(c => c.id === 'injected') || connectors[0];
+      if (injectedConnector) {
+        // Connect automatically with a small delay to ensure everything is loaded
+        const timer = setTimeout(() => {
+          connect({ connector: injectedConnector });
+        }, 500);
+        
+        return () => clearTimeout(timer);
+      }
+    }
+  }, [isConnected, connectors, connect]);
 
   // Check if we're in a Farcaster frame
   const isInFrame = useMemo(() => {
@@ -226,158 +244,85 @@ export default function ColorFrame({ context }: ColorFrameProps) {
       }
     }, 300); // Increase timeout to ensure script has time to initialize
   };
-  
-  // Function to connect wallet
-  const connectWallet = async () => {
-    try {
-      // Check if we're in a Farcaster frame
-      if (!isInFrame) {
-        toast.error("This feature is only available in a Farcaster frame");
-        return;
-      }
 
-      // Try to connect to the wallet using wagmi hooks
-      if (!isConnected) {
-        const toastId = toast.loading("Connecting to wallet...");
-        try {
-          // Connect wallet using the first available connector
-          if (connectors[0]) {
-            connect({ connector: connectors[0] });
-            toast.dismiss(toastId);
-            toast.success("Wallet connection initiated");
-          } else {
-            toast.dismiss(toastId);
-            throw new Error("No wallet connectors available");
-          }
-        } catch (walletError) {
-          console.error("Error connecting wallet:", walletError);
-          toast.dismiss(toastId);
-          toast.error(`Wallet connection failed: ${walletError instanceof Error ? walletError.message : 'Unknown error'}`);
-          
-          // Fallback to mock data
-          provideMockData();
-        }
-      } else {
-        // We already have a connected wallet
-        toast.success(`Wallet connected: ${address?.slice(0, 6)}...${address?.slice(-4)}`);
-      }
-    } catch (error) {
-      console.error('Error connecting wallet:', error);
-      toast.error('Failed to connect wallet');
-      
-      // Fallback to mock data
-      provideMockData();
-    }
-  };
+  // Track active toast IDs for proper cleanup
+  const fetchToastIdRef = useRef<string | null>(null);
   
-  // Helper function to provide mock data when needed
-  const provideMockData = () => {
-    toast('Using mock Base Colors for demonstration', {
-      icon: '🎨',
-      duration: 3000,
-    });
-    
-    // Create mock Base Colors with the required imageUrl property
-    setTimeout(() => {
-      if (ownedColors.length === 0) {
-        const mockColors = [
-          { tokenId: '1', name: 'Red', colorValue: '#FF0000', imageUrl: 'https://basecolors.xyz/api/image/1' },
-          { tokenId: '2', name: 'Green', colorValue: '#00FF00', imageUrl: 'https://basecolors.xyz/api/image/2' },
-          { tokenId: '3', name: 'Blue', colorValue: '#0000FF', imageUrl: 'https://basecolors.xyz/api/image/3' },
-          { tokenId: '4', name: 'Yellow', colorValue: '#FFFF00', imageUrl: 'https://basecolors.xyz/api/image/4' },
-          { tokenId: '5', name: 'Purple', colorValue: '#800080', imageUrl: 'https://basecolors.xyz/api/image/5' },
-        ];
-        setOwnedColors(mockColors);
-        setSelectedColor(mockColors[0].colorValue);
-      }
-    }, 1000);
-  };
-
   // Fetch owned Base Colors when wallet is connected
   useEffect(() => {
+    let isMounted = true;
+
     async function getOwnedColors() {
-      if (!address || hasFetchedColors) return;
+      if (!address || fetchingNFTs) return;
       
       try {
-        setFetchingNFTs(true);
-        const toastId = toast.loading('Fetching your Base Colors...');
-        const colors = await fetchOwnedBaseColors(address);
-        toast.dismiss(toastId);
+        // Clear any existing fetch toast first to prevent duplicates
+        if (fetchToastIdRef.current) {
+          toast.dismiss(fetchToastIdRef.current);
+        }
         
-        if (colors.length > 0) {
-          setOwnedColors(colors);
-          setSelectedColor(colors[0].colorValue);
-          toast.success(`Found ${colors.length} Base Colors`);
-        } else {
-          toast.error('No Base Colors found for this wallet');
-          // Provide mock data as fallback if no real colors found
-          provideMockData();
+        setFetchingNFTs(true);
+        setOwnedColors([]); // Clear previous colors
+        setSelectedColor(null); // Clear selected color
+        setSelectedColorName(null);
+        
+        const toastId = toast.loading('Fetching your Base Colors...');
+        fetchToastIdRef.current = toastId;
+        
+        const colors = await fetchOwnedBaseColors(address);
+        
+        // Only update state if component is still mounted
+        if (isMounted) {
+          if (colors.length > 0) {
+            setOwnedColors(colors);
+            setSelectedColor(colors[0].colorValue);
+            setSelectedColorName(colors[0].name);
+            toast.success(`Found ${colors.length} Base Colors`);
+          } else {
+            setOwnedColors([]);
+            setSelectedColor(null);
+            setSelectedColorName(null);
+            toast.error('No Base Colors found for this wallet');
+          }
+        }
+
+        if (isMounted) {
+          toast.dismiss(toastId);
+          fetchToastIdRef.current = null;
         }
       } catch (error) {
         console.error('Error fetching owned colors:', error);
-        toast.error('Failed to fetch owned colors');
-        // Provide mock data as fallback on error
-        provideMockData();
+        if (isMounted) {
+          setOwnedColors([]);
+          setSelectedColor(null);
+          setSelectedColorName(null);
+          toast.error('Failed to fetch owned colors');
+        }
       } finally {
-        setFetchingNFTs(false);
-        setHasFetchedColors(true);
+        if (isMounted) {
+          setFetchingNFTs(false);
+          
+          // Ensure toast is dismissed even if there was an error
+          if (fetchToastIdRef.current) {
+            toast.dismiss(fetchToastIdRef.current);
+            fetchToastIdRef.current = null;
+          }
+        }
       }
     }
     
     if (address && isConnected) {
       getOwnedColors();
     }
-  }, [address, isConnected, hasFetchedColors]);
 
-  // Reset hasFetchedColors flag when address changes
-  useEffect(() => {
-    setHasFetchedColors(false);
-  }, [address]);
-
-  // Function to schedule auto cycling - temporarily disabled
-  /* 
-  const handleScheduleUpdates = async () => {
-    if (!context?.user?.fid) {
-      toast.error('FID not available, cannot schedule updates');
-      return;
-    }
-    
-    if (!neynarSignerUuid) {
-      toast.error('Please connect with Farcaster first');
-      connectWithNeynar();
-      return;
-    }
-    
-    if (!selectedColor) {
-      toast.error('Please select a color first');
-      return;
-    }
-    
-    const toastId = toast.loading(`Scheduling ${selectedInterval} updates...`);
-    
-    try {
-      // Call the API to schedule updates
-      const response = await scheduleProfileUpdates({
-        fid: context.user.fid,
-        signerUuid: neynarSignerUuid,
-        interval: selectedInterval,
-        colors: ownedColors.map(c => c.colorValue)
-      });
-      
-      toast.dismiss(toastId);
-      
-      if (response.success) {
-        toast.success(`Auto updates scheduled for ${selectedInterval} interval!`);
-      } else {
-        throw new Error(response.error || 'Unknown error');
+    return () => {
+      isMounted = false;
+      // Clean up any active toasts when unmounting
+      if (fetchToastIdRef.current) {
+        toast.dismiss(fetchToastIdRef.current);
       }
-    } catch (error) {
-      console.error('Error scheduling updates:', error);
-      toast.dismiss(toastId);
-      toast.error(`Failed to schedule updates: ${error instanceof Error ? error.message : 'Unknown error'}`);
-    }
-  };
-  */
+    };
+  }, [address, isConnected]);
 
   // Function to set profile picture using Neynar
   const updateProfilePicture = async () => {
@@ -483,156 +428,248 @@ export default function ColorFrame({ context }: ColorFrameProps) {
     );
   }
 
-  return (
-    <div className="flex flex-col items-center p-4 max-w-md mx-auto">
-      <Toaster />
-      <h1 className="text-xl font-bold mb-4">Base Colors Profile Picture</h1>
-      
-      {!isConnected ? (
-        // Step 1: Connect wallet first
-        <div className="w-full space-y-2">
-          <button
-            className="bg-indigo-600 text-white py-2 px-4 rounded-md hover:bg-indigo-700 w-full"
-            onClick={connectWallet}
-            disabled={loading}
-          >
-            Connect Wallet
-          </button>
-        </div>
-      ) : !neynarSignerUuid ? (
-        // Step 2: After wallet is connected, connect Farcaster if not already connected
-        <div className="w-full space-y-2">
-          <p className="mb-4">Wallet connected: {address ? `${address.slice(0, 6)}...${address.slice(-4)}` : 'Unknown'}</p>
-          <button
-            className="bg-indigo-600 text-white py-2 px-4 rounded-md hover:bg-indigo-700 w-full"
-            onClick={connectWithNeynar}
-            disabled={loading}
-          >
-            Connect with Farcaster
-          </button>
-        </div>
-      ) : (
-        // Step 3: Both wallet and Farcaster are connected
-        <>
-          <p className="mb-4">
-            <span className="mr-4">Wallet: {address ? `${address.slice(0, 6)}...${address.slice(-4)}` : 'Unknown'}</span>
-            <span>Farcaster: Connected</span>
-          </p>
-          
-          {fetchingNFTs ? (
-            <p>Loading your Base Colors...</p>
-          ) : ownedColors.length === 0 ? (
-            <p>You don&apos;t own any Base Colors. Get some first!</p>
-          ) : (
-            <>
-              <div className="grid grid-cols-5 gap-2 w-full mb-4">
-                {ownedColors.map((color) => (
-                  <div
-                    key={color.tokenId}
-                    className={`w-12 h-12 rounded-md cursor-pointer border-2 ${
-                      selectedColor === color.colorValue ? 'border-indigo-600' : 'border-transparent'
-                    }`}
-                    style={{ backgroundColor: color.colorValue }}
-                    onClick={() => setSelectedColor(color.colorValue)}
-                    title={color.name}
-                  />
-                ))}
-              </div>
-              
-              <div className="w-full mb-4">
-                {selectedColor && (
-                  <div className="flex flex-col items-center">
-                    <div
-                      className="w-32 h-32 rounded-full mb-2"
-                      style={{ backgroundColor: selectedColor }}
-                    />
-                    <p className="text-sm">{selectedColor}</p>
-                  </div>
-                )}
-              </div>
-
-              {/* Auto-cycle feature - temporarily disabled 
-              <div className="w-full mb-4">
-                <div className="flex items-center mb-2">
-                  <input
-                    id="autoCycle"
-                    type="checkbox"
-                    className="mr-2"
-                    checked={autoCycleEnabled}
-                    onChange={(e) => setAutoCycleEnabled(e.target.checked)}
-                  />
-                  <label htmlFor="autoCycle">Auto-cycle through colors</label>
+  // Helper function to render color selection UI
+  const renderColorSelection = () => {
+    if (fetchingNFTs) {
+      return (
+        <div className="flex flex-col items-center justify-center py-4 bg-[#0C1428] rounded-xl p-4 mb-4">
+          <div className="animate-pulse flex space-x-4 mb-3">
+            <div className="rounded-full bg-gray-700 h-10 w-10"></div>
+            <div className="flex-1 space-y-3 py-1">
+              <div className="h-2 bg-gray-700 rounded"></div>
+              <div className="space-y-2">
+                <div className="grid grid-cols-3 gap-3">
+                  <div className="h-2 bg-gray-700 rounded col-span-2"></div>
+                  <div className="h-2 bg-gray-700 rounded col-span-1"></div>
                 </div>
+              </div>
+            </div>
+          </div>
+          <p className="text-slate-300 animate-pulse">Loading your Base Colors...</p>
+        </div>
+      );
+    }
+    
+    if (ownedColors.length === 0) {
+      return (
+        <div className="flex flex-col items-center justify-center p-5 bg-[#0C1428] rounded-xl mb-4">
+          <svg 
+            xmlns="http://www.w3.org/2000/svg" 
+            className="h-14 w-14 text-slate-500 mb-3" 
+            fill="none" 
+            viewBox="0 0 24 24" 
+            stroke="currentColor" 
+            strokeWidth={1.5}
+          >
+            <path 
+              strokeLinecap="round" 
+              strokeLinejoin="round" 
+              d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" 
+            />
+          </svg>
+          <h3 className="text-xl font-medium mb-2 text-white">No Base Colors Found</h3>
+          <p className="text-slate-300 mb-4 text-center leading-relaxed">You don&apos;t own any Base Colors yet. Get your unique color NFT to use as a profile picture.</p>
+          <a 
+            href="https://basecolors.com" 
+            target="_blank" 
+            rel="noopener noreferrer" 
+            className="bg-blue-600 text-white py-2 px-6 rounded-lg font-medium hover:bg-blue-700 transition-all"
+          >
+            Get Base Colors
+          </a>
+        </div>
+      );
+    }
+    
+    return (
+      <div className="bg-[#0C1428] p-4 rounded-xl mb-3">
+        <h3 className="text-lg font-medium mb-3 text-white">Your Base Colors</h3>
+        <div className="relative">
+          {/* Large color preview taking up most of the space */}
+          <div 
+            className="w-full aspect-square rounded-md shadow-lg mb-3 relative"
+            style={{ backgroundColor: selectedColor || '#ffffff' }}
+          >
+            {/* Color hex value displayed in top right of the preview */}
+            {selectedColor && (
+              <div className="absolute top-3 right-3">
+                <p className="text-xs font-mono bg-black/80 py-1 px-2 rounded-md text-slate-300">{selectedColor}</p>
+              </div>
+            )}
+            
+            {/* Color name displayed at the bottom */}
+            {selectedColorName && selectedColorName !== selectedColor && (
+              <div className="absolute bottom-3 left-3 right-3">
+                <p className="text-sm font-medium bg-black/80 py-1 px-3 rounded-md text-white text-center truncate">{selectedColorName}</p>
+              </div>
+            )}
+          </div>
+          
+          {/* Color options with horizontal scrolling */}
+          <div className="flex overflow-x-auto pb-2 space-x-3 snap-x snap-mandatory">
+            {ownedColors.map((color) => (
+              <div
+                key={color.tokenId}
+                className={`flex-none w-14 h-14 rounded-md cursor-pointer transition-all snap-start ${
+                  selectedColor === color.colorValue 
+                    ? 'border-2 border-white shadow-md' 
+                    : 'border border-gray-700'
+                }`}
+                style={{ backgroundColor: color.colorValue }}
+                onClick={() => {
+                  setSelectedColor(color.colorValue);
+                  setSelectedColorName(color.name);
+                }}
+                title={color.name}
+              />
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  return (
+    <div className="bg-[#0F2352] min-h-screen w-full">
+      <div className="w-full py-8 px-6">
+        <div className="absolute top-2 right-2 text-white/60 hover:text-white">
+          <button
+            onClick={() => frameSdk.actions.close()}
+            aria-label="Close frame"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="18" y1="6" x2="6" y2="18"></line>
+              <line x1="6" y1="6" x2="18" y2="18"></line>
+            </svg>
+          </button>
+        </div>
+        
+        <Toaster 
+          position="top-center"
+          toastOptions={{
+            duration: 4000,
+            style: {
+              background: '#0F1318',
+              color: '#fff',
+              borderRadius: '8px',
+            },
+          }}
+        />
+        
+        <h1 className="text-3xl font-bold mb-5 text-white text-center">
+          Base Colors
+        </h1>
+        
+        {!isConnected ? (
+          // Connect wallet step
+          <div className="bg-[#0C1428] rounded-xl p-5 mb-4">
+            <ConnectButton.Custom>
+              {({
+                openConnectModal,
+                mounted,
+              }) => {
+                const ready = mounted;
                 
-                {autoCycleEnabled && (
-                  <div className="ml-6 mb-2">
-                    <label htmlFor="interval" className="block mb-1 text-sm">Change interval:</label>
-                    <select 
-                      id="interval"
-                      className="block w-full p-2 border border-gray-300 rounded-md"
-                      value={selectedInterval}
-                      onChange={(e) => setSelectedInterval(e.target.value as 'daily' | 'weekly' | 'monthly')}
-                    >
-                      <option value="daily">Daily</option>
-                      <option value="weekly">Weekly</option>
-                      <option value="monthly">Monthly</option>
-                    </select>
-                    
+                return (
+                  <div
+                    {...(!ready && {
+                      'aria-hidden': true,
+                      style: {
+                        opacity: 0,
+                        pointerEvents: 'none',
+                        userSelect: 'none',
+                      },
+                    })}
+                    className="w-full"
+                  >
+                    {!ready ? null : (
+                      <button 
+                        onClick={openConnectModal} 
+                        className="w-full py-3 px-4 bg-blue-600 text-white rounded-lg font-medium hover:bg-blue-700"
+                      >
+                        Connect Wallet
+                      </button>
+                    )}
+                  </div>
+                );
+              }}
+            </ConnectButton.Custom>
+          </div>
+        ) : (
+          <>
+            {/* Connected wallet */}
+            <div className="bg-[#0C1428] rounded-xl p-3 flex justify-center mb-3">
+              <ConnectButton showBalance={false} accountStatus="address" chainStatus="icon" />
+            </div>
+            
+            {/* Color selection */}
+            {renderColorSelection()}
+            
+            {/* Farcaster connection */}
+            {ownedColors.length > 0 && (
+              <div className="bg-[#0C1428] rounded-xl p-5 mb-3">
+                {!neynarSignerUuid ? (
+                  <>
+                    <h3 className="text-xl font-medium mb-3 text-white">Connect Farcaster</h3>
                     <button
-                      className="mt-2 bg-green-600 text-white py-1 px-3 rounded-md hover:bg-green-700 text-sm"
-                      onClick={handleScheduleUpdates}
+                      className="w-full bg-blue-600 text-white py-3 px-4 rounded-lg font-medium hover:bg-blue-700 transition-all"
+                      onClick={connectWithNeynar}
                       disabled={loading}
                     >
-                      Schedule Auto Updates
+                      Connect with Farcaster
                     </button>
-                  </div>
+                  </>
+                ) : (
+                  <>
+                    <button
+                      className={`w-full py-3 px-4 rounded-lg font-medium ${
+                        loading || !selectedColor 
+                          ? 'bg-gray-600 text-gray-300 cursor-not-allowed'
+                          : 'bg-blue-600 text-white hover:bg-blue-700 transition-all'
+                      }`}
+                      onClick={updateProfilePicture}
+                      disabled={loading || !selectedColor}
+                    >
+                      {loading ? 
+                        <span className="flex items-center justify-center">
+                          <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                          </svg>
+                          Processing...
+                        </span> 
+                        : "Set as Profile Picture"
+                      }
+                    </button>
+                    
+                    {errorMessage && (
+                      <div className="p-3 mt-3 bg-red-500/10 border border-red-500/30 rounded-lg text-red-400 text-xs">
+                        <p className="font-bold mb-1">Error</p>
+                        {errorMessage}
+                      </div>
+                    )}
+                  </>
                 )}
               </div>
-              */}
-              
-              <div className="w-full mb-4">
+            )}
+            
+            {deepLinkUrl && loading && (
+              <div className="flex flex-col items-center bg-[#0C1428] p-4 rounded-xl">
+                <p className="mb-2 text-sm font-medium text-white">Scan this QR code:</p>
+                <div className="p-2 bg-white rounded-lg">
+                  <QRCode value={deepLinkUrl} size={140} />
+                </div>
                 <button
-                  className="bg-indigo-600 text-white py-2 px-4 rounded-md hover:bg-indigo-700 w-full mb-2"
-                  onClick={updateProfilePicture}
-                  disabled={loading || !selectedColor}
+                  className="mt-2 text-blue-400 underline hover:text-blue-300 transition-colors text-sm"
+                  onClick={() => frameSdk.actions.openUrl(deepLinkUrl)}
                 >
-                  Set as Profile Picture
+                  Open URL
                 </button>
-                
-                {errorMessage && (
-                  <div className="p-3 mt-2 mb-2 bg-red-100 border border-red-300 rounded text-red-800 text-sm">
-                    {errorMessage}
-                  </div>
-                )}
               </div>
-            </>
-          )}
-        </>
-      )}
-      
-      {deepLinkUrl && loading && (
-        <div className="flex flex-col items-center mt-4">
-          <p className="mb-2">Please scan this QR code with your mobile device:</p>
-          <QRCode value={deepLinkUrl} size={200} />
-          <p className="mt-2">
-            Or{' '}
-            <button
-              className="text-indigo-600 underline"
-              onClick={() => frameSdk.actions.openUrl(deepLinkUrl)}
-            >
-              open this URL
-            </button>{' '}
-            if you&apos;re on mobile.
-          </p>
-        </div>
-      )}
-      
-      <button
-        className="mt-4 text-sm text-gray-500"
-        onClick={() => frameSdk.actions.close()}
-      >
-        Close Frame
-      </button>
+            )}
+          </>
+        )}
+      </div>
     </div>
   );
 } 
