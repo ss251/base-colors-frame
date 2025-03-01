@@ -5,11 +5,11 @@ import { useAtom } from 'jotai';
 import { atom } from 'jotai';
 import QRCode from 'react-qr-code';
 import toast, { Toaster } from 'react-hot-toast';
-import frameSdk, { Context } from '@farcaster/frame-sdk';
+import frameSdkOriginal, { Context } from '@farcaster/frame-sdk';
 import { useAccount, useConnect } from 'wagmi';
-import { ConnectButton } from '@rainbow-me/rainbowkit';
 
 import { fetchOwnedBaseColors, generateColorSvg, BaseColor } from '../utils/baseColors';
+import { frameSdk, ExtendedFrameSdk } from '@/lib/frame-sdk';
 // import { scheduleProfileUpdates } from '../utils/baseColors'; // Will be used when auto-cycle is implemented
 
 // Type declaration for the global window object
@@ -120,32 +120,174 @@ export default function ColorFrame({ context }: ColorFrameProps) {
   const [neynarSignerUuid, setNeynarSignerUuid] = useAtom(neynarSignerUuidAtom);
   const [fetchingNFTs, setFetchingNFTs] = useState<boolean>(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [hasFetchedColors, setHasFetchedColors] = useState<boolean>(false);
   
   // Access wagmi hooks for wallet connection
   const { address, isConnected } = useAccount();
   const { connect, connectors } = useConnect();
-  
-  // Auto connect to wallet
-  useEffect(() => {
-    // Only attempt auto-connect if not already connected
-    if (!isConnected && connectors.length > 0) {
-      // Find the injected connector (e.g., MetaMask) or use the first available
-      const injectedConnector = connectors.find(c => c.id === 'injected') || connectors[0];
-      if (injectedConnector) {
-        // Connect automatically with a small delay to ensure everything is loaded
-        const timer = setTimeout(() => {
-          connect({ connector: injectedConnector });
-        }, 500);
-        
-        return () => clearTimeout(timer);
-      }
-    }
-  }, [isConnected, connectors, connect]);
 
   // Check if we're in a Farcaster frame
   const isInFrame = useMemo(() => {
     return !!context?.user?.fid;
   }, [context]);
+
+  // Use frame-specific wallet detection
+  useEffect(() => {
+    if (isInFrame && !isConnected) {
+      // Check if wallet is already connected via frameSdk
+      const checkFrameWallet = async () => {
+        try {
+          // Use the properly typed SDK
+          const isConnectedInFrame = await (frameSdk as ExtendedFrameSdk).isWalletConnected();
+          console.log('Frame wallet connection check:', isConnectedInFrame);
+          
+          if (isConnectedInFrame) {
+            // If connected in frame but not detected by wagmi, manually connect
+            const farcasterConnector = connectors.find(c => c.id === 'farcaster');
+            if (farcasterConnector) {
+              connect({ connector: farcasterConnector });
+            }
+          }
+        } catch (error) {
+          console.error('Error checking frame wallet connection:', error);
+        }
+      };
+      
+      checkFrameWallet();
+    }
+  }, [isInFrame, isConnected, connectors, connect]);
+  
+  // Function to connect wallet - simplified implementation without mock data
+  const connectWallet = async () => {
+    try {
+      // Check if we're in a Farcaster frame
+      if (!isInFrame) {
+        toast.error("This feature is only available in a Farcaster frame");
+        return;
+      }
+
+      // Try to connect to the wallet using wagmi hooks
+      if (!isConnected) {
+        const toastId = toast.loading("Connecting to wallet...");
+        try {
+          // Try frame-specific connection first
+          const accounts = await (frameSdk as ExtendedFrameSdk).connectWallet();
+          
+          if (accounts.length > 0) {
+            // If we got accounts from the frame, connect using the connector
+            const farcasterConnector = connectors.find(c => c.id === 'farcaster');
+            if (farcasterConnector) {
+              connect({ connector: farcasterConnector });
+              toast.dismiss(toastId);
+              toast.success("Wallet connection initiated");
+              return;
+            }
+          }
+          
+          // Connect wallet using the first available connector as fallback
+          if (connectors[0]) {
+            connect({ connector: connectors[0] });
+            toast.dismiss(toastId);
+            toast.success("Wallet connection initiated");
+          } else {
+            toast.dismiss(toastId);
+            throw new Error("No wallet connectors available");
+          }
+        } catch (walletError) {
+          console.error("Error connecting wallet:", walletError);
+          toast.dismiss(toastId);
+          toast.error(`Wallet connection failed: ${walletError instanceof Error ? walletError.message : 'Unknown error'}`);
+        }
+      } else {
+        // We already have a connected wallet
+        toast.success(`Wallet connected: ${address?.slice(0, 6)}...${address?.slice(-4)}`);
+      }
+    } catch (error) {
+      console.error('Error connecting wallet:', error);
+      toast.error('Failed to connect wallet');
+    }
+  };
+  
+  // Track active toast IDs for proper cleanup
+  const fetchToastIdRef = useRef<string | null>(null);
+  
+  // Fetch owned Base Colors when wallet is connected - simplified implementation
+  useEffect(() => {
+    // Clear flags when address changes to ensure refetch
+    if (address) {
+      setHasFetchedColors(false);
+    }
+  }, [address]);
+
+  useEffect(() => {
+    // Only run if we have an address, are connected, haven't fetched yet and aren't currently fetching
+    if (!address || !isConnected || hasFetchedColors || fetchingNFTs) {
+      return;
+    }
+
+    console.log('Initiating color fetch for address:', address);
+    
+    const fetchColors = async () => {
+      // Dismiss any existing toasts
+      if (fetchToastIdRef.current) {
+        toast.dismiss(fetchToastIdRef.current);
+        fetchToastIdRef.current = null;
+      }
+      
+      // Set loading state
+      setFetchingNFTs(true);
+
+      // Show loading toast
+      const toastId = toast.loading('Fetching your Base Colors...');
+      fetchToastIdRef.current = toastId;
+
+      try {
+        // Set timeout for fetch operation
+        const fetchWithTimeout = new Promise<BaseColor[]>((resolve, reject) => {
+          const timeoutId = setTimeout(() => {
+            reject(new Error('Fetch operation timed out'));
+          }, 15000); // 15 second timeout
+
+          fetchOwnedBaseColors(address)
+            .then(colors => {
+              clearTimeout(timeoutId);
+              resolve(colors);
+            })
+            .catch(error => {
+              clearTimeout(timeoutId);
+              reject(error);
+            });
+        });
+
+        // Await the fetch with timeout
+        const colors = await fetchWithTimeout;
+        
+        if (colors.length > 0) {
+          setOwnedColors(colors);
+          setSelectedColor(colors[0].colorValue);
+          setSelectedColorName(colors[0].name);
+          toast.success(`Found ${colors.length} Base Colors`);
+        } else {
+          console.log('No Base Colors found');
+          setOwnedColors([]);
+        }
+      } catch (error) {
+        console.error('Failed to fetch colors:', error);
+        toast.error('Failed to fetch Base Colors');
+        setOwnedColors([]);
+      } finally {
+        // Always clean up
+        if (fetchToastIdRef.current) {
+          toast.dismiss(fetchToastIdRef.current);
+          fetchToastIdRef.current = null;
+        }
+        setFetchingNFTs(false);
+        setHasFetchedColors(true);
+      }
+    };
+
+    fetchColors();
+  }, [address, isConnected, hasFetchedColors, fetchingNFTs]);
 
   // Initialize SIWN on component mount
   useEffect(() => {
@@ -244,85 +386,6 @@ export default function ColorFrame({ context }: ColorFrameProps) {
       }
     }, 300); // Increase timeout to ensure script has time to initialize
   };
-
-  // Track active toast IDs for proper cleanup
-  const fetchToastIdRef = useRef<string | null>(null);
-  
-  // Fetch owned Base Colors when wallet is connected
-  useEffect(() => {
-    let isMounted = true;
-
-    async function getOwnedColors() {
-      if (!address || fetchingNFTs) return;
-      
-      try {
-        // Clear any existing fetch toast first to prevent duplicates
-        if (fetchToastIdRef.current) {
-          toast.dismiss(fetchToastIdRef.current);
-        }
-        
-        setFetchingNFTs(true);
-        setOwnedColors([]); // Clear previous colors
-        setSelectedColor(null); // Clear selected color
-        setSelectedColorName(null);
-        
-        const toastId = toast.loading('Fetching your Base Colors...');
-        fetchToastIdRef.current = toastId;
-        
-        const colors = await fetchOwnedBaseColors(address);
-        
-        // Only update state if component is still mounted
-        if (isMounted) {
-          if (colors.length > 0) {
-            setOwnedColors(colors);
-            setSelectedColor(colors[0].colorValue);
-            setSelectedColorName(colors[0].name);
-            toast.success(`Found ${colors.length} Base Colors`);
-          } else {
-            setOwnedColors([]);
-            setSelectedColor(null);
-            setSelectedColorName(null);
-            toast.error('No Base Colors found for this wallet');
-          }
-        }
-
-        if (isMounted) {
-          toast.dismiss(toastId);
-          fetchToastIdRef.current = null;
-        }
-      } catch (error) {
-        console.error('Error fetching owned colors:', error);
-        if (isMounted) {
-          setOwnedColors([]);
-          setSelectedColor(null);
-          setSelectedColorName(null);
-          toast.error('Failed to fetch owned colors');
-        }
-      } finally {
-        if (isMounted) {
-          setFetchingNFTs(false);
-          
-          // Ensure toast is dismissed even if there was an error
-          if (fetchToastIdRef.current) {
-            toast.dismiss(fetchToastIdRef.current);
-            fetchToastIdRef.current = null;
-          }
-        }
-      }
-    }
-    
-    if (address && isConnected) {
-      getOwnedColors();
-    }
-
-    return () => {
-      isMounted = false;
-      // Clean up any active toasts when unmounting
-      if (fetchToastIdRef.current) {
-        toast.dismiss(fetchToastIdRef.current);
-      }
-    };
-  }, [address, isConnected]);
 
   // Function to set profile picture using Neynar
   const updateProfilePicture = async () => {
@@ -534,7 +597,7 @@ export default function ColorFrame({ context }: ColorFrameProps) {
       <div className="w-full py-8 px-6">
         <div className="absolute top-2 right-2 text-white/60 hover:text-white">
           <button
-            onClick={() => frameSdk.actions.close()}
+            onClick={() => frameSdkOriginal.actions.close()}
             aria-label="Close frame"
           >
             <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -561,45 +624,26 @@ export default function ColorFrame({ context }: ColorFrameProps) {
         </h1>
         
         {!isConnected ? (
-          // Connect wallet step
           <div className="bg-[#0C1428] rounded-xl p-5 mb-4">
-            <ConnectButton.Custom>
-              {({
-                openConnectModal,
-                mounted,
-              }) => {
-                const ready = mounted;
-                
-                return (
-                  <div
-                    {...(!ready && {
-                      'aria-hidden': true,
-                      style: {
-                        opacity: 0,
-                        pointerEvents: 'none',
-                        userSelect: 'none',
-                      },
-                    })}
-                    className="w-full"
-                  >
-                    {!ready ? null : (
-                      <button 
-                        onClick={openConnectModal} 
-                        className="w-full py-3 px-4 bg-blue-600 text-white rounded-lg font-medium hover:bg-blue-700"
-                      >
-                        Connect Wallet
-                      </button>
-                    )}
-                  </div>
-                );
-              }}
-            </ConnectButton.Custom>
+            <h3 className="text-xl font-medium mb-3 text-white">Connect Wallet</h3>
+            <button
+              className="w-full bg-blue-600 text-white py-3 px-4 rounded-lg font-medium hover:bg-blue-700 transition-all"
+              onClick={connectWallet}
+              disabled={loading}
+            >
+              Connect Wallet
+            </button>
           </div>
         ) : (
           <>
-            {/* Connected wallet */}
-            <div className="bg-[#0C1428] rounded-xl p-3 flex justify-center mb-3">
-              <ConnectButton showBalance={false} accountStatus="address" chainStatus="icon" />
+            {/* Connected wallet address display */}
+            <div className="bg-[#0C1428] rounded-xl p-3 mb-3">
+              <div className="flex items-center justify-center space-x-2">
+                <div className="w-3 h-3 bg-green-500 rounded-full"></div>
+                <p className="text-white font-medium">
+                  {address ? `${address.slice(0, 6)}...${address.slice(-4)}` : 'Wallet Connected'}
+                </p>
+              </div>
             </div>
             
             {/* Color selection */}
@@ -661,7 +705,7 @@ export default function ColorFrame({ context }: ColorFrameProps) {
                 </div>
                 <button
                   className="mt-2 text-blue-400 underline hover:text-blue-300 transition-colors text-sm"
-                  onClick={() => frameSdk.actions.openUrl(deepLinkUrl)}
+                  onClick={() => frameSdkOriginal.actions.openUrl(deepLinkUrl)}
                 >
                   Open URL
                 </button>
