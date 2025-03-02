@@ -64,6 +64,8 @@ export default function ColorFrame({ context }: ColorFrameProps) {
   const profileToastIdRef = useRef<string | null>(null);
   // Add a ref to track if we've already fetched the profile this session
   const hasProfileFetchedRef = useRef<boolean>(false);
+  // Add a ref to track if we've already shown the approval toast
+  const hasShownApprovalToastRef = useRef<boolean>(false);
 
   // Auto-cycle feature temporarily disabled - will implement later
   // const [selectedInterval, setSelectedInterval] = useState<'daily' | 'weekly' | 'monthly'>('daily');
@@ -716,6 +718,9 @@ export default function ColorFrame({ context }: ColorFrameProps) {
       console.log('[POLLING] Cleared existing polling interval');
     }
     
+    // Reset the approval toast shown flag if we're starting a new polling session
+    hasShownApprovalToastRef.current = false;
+    
     console.log('[POLLING] Setting isCheckingSigner to TRUE');
     setIsCheckingSignerSafely(true);
     console.log('[POLLING] Starting polling for signer:', signerUuid);
@@ -826,6 +831,8 @@ export default function ColorFrame({ context }: ColorFrameProps) {
         // If the signer is approved, we can stop polling and update the state
         if (signer.status === 'approved') {
           console.log('[POLLING] SIGNER IS APPROVED! 🎉 Stopping polling');
+          
+          // Stop polling immediately to prevent double calls
           if (signerCheckIntervalRef.current) {
             clearInterval(signerCheckIntervalRef.current);
             signerCheckIntervalRef.current = null;
@@ -833,7 +840,12 @@ export default function ColorFrame({ context }: ColorFrameProps) {
           
           console.log('[POLLING] Setting isCheckingSigner to FALSE');
           setIsCheckingSignerSafely(false);
-          toast.success('Farcaster connection approved!');
+          
+          // Only show the toast once when the signer is approved
+          if (!hasShownApprovalToastRef.current) {
+            toast.success('Farcaster connection approved!');
+            hasShownApprovalToastRef.current = true;
+          }
           
           // Set the signer UUID for API calls
           setNeynarSignerUuid(signer.signer_uuid);
@@ -842,6 +854,9 @@ export default function ColorFrame({ context }: ColorFrameProps) {
           if (signer.fid) {
             fetchUserProfilePicture(signer.fid);
           }
+          
+          // Important: Return early to prevent any further processing
+          return;
         } else {
           console.log(`[POLLING] Signer not yet approved, continuing to poll. Current status: ${signer.status}`);
         }
@@ -1041,6 +1056,12 @@ export default function ColorFrame({ context }: ColorFrameProps) {
             console.error('[POLLING-HEARTBEAT] Error recovering UUID from localStorage:', e);
           }
         }
+      } else if (managedSigner?.status === 'approved' && signerCheckIntervalRef.current) {
+        // If signer is approved but polling is still active, stop polling
+        console.log('[POLLING-HEARTBEAT] Signer is approved but polling is still active. Stopping polling.');
+        clearInterval(signerCheckIntervalRef.current);
+        signerCheckIntervalRef.current = null;
+        setIsCheckingSignerSafely(false);
       }
     }, 5000); // Check every 5 seconds
     
