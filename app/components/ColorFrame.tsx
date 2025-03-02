@@ -465,6 +465,9 @@ export default function ColorFrame({ context }: ColorFrameProps) {
   const [isCheckingSigner, setIsCheckingSigner] = useState<boolean>(false);
   const signerCheckIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
+  // Add this flag to prevent recursion
+  const isSettingCheckingSafelyRef = useRef<boolean>(false);
+
   // Function to create a new managed signer
   const createManagedSigner = async () => {
     if (isCreatingSigner) return;
@@ -610,7 +613,14 @@ export default function ColorFrame({ context }: ColorFrameProps) {
       toast.error("No signer UUID available");
       return;
     }
+
+    // Prevent multiple concurrent registration attempts
+    if (isCreatingSigner) {
+      console.log('[REGISTER] Registration already in progress, ignoring duplicate click');
+      return;
+    }
     
+    setIsCreatingSigner(true);
     const toastId = toast.loading("Registering signer...");
     
     try {
@@ -620,6 +630,7 @@ export default function ColorFrame({ context }: ColorFrameProps) {
       // Store the current approval URL in case we need to preserve it
       const currentApprovalUrl = managedSigner.signer_approval_url;
       
+      console.log(`[REGISTER] Manually registering signer with UUID: ${managedSigner.signer_uuid}`);
       const response = await fetch('/api/neynar/register-signer', {
         method: 'POST',
         headers: {
@@ -632,12 +643,12 @@ export default function ColorFrame({ context }: ColorFrameProps) {
       
       if (!response.ok) {
         const errorText = await response.text();
-        console.error('Manual registration error:', errorText);
+        console.error('[REGISTER] Manual registration error:', errorText);
         toast.error("Failed to register: " + errorText);
         
         // If registration fails but we had an approval URL, preserve it
         if (currentApprovalUrl) {
-          console.log('Preserving existing approval URL after registration failure');
+          console.log('[REGISTER] Preserving existing approval URL after registration failure');
           // Keep existing approval URL in case of failure
           setManagedSigner(prev => ({
             ...prev!,
@@ -649,9 +660,16 @@ export default function ColorFrame({ context }: ColorFrameProps) {
       }
       
       const data = await response.json();
-      console.log('Manual registration result:', data);
+      console.log('[REGISTER] Manual registration result:', data);
       
       if (data.signer_approval_url) {
+        // Clear any existing interval before updating state to prevent race conditions
+        if (signerCheckIntervalRef.current) {
+          console.log('[REGISTER] Clearing existing polling interval before updating state');
+          clearInterval(signerCheckIntervalRef.current);
+          signerCheckIntervalRef.current = null;
+        }
+        
         // Create an updated signer with all necessary fields
         const updatedSigner = {
           // Start with existing signer data to preserve any fields
@@ -663,6 +681,12 @@ export default function ColorFrame({ context }: ColorFrameProps) {
           public_key: data.public_key || managedSigner.public_key || ''
         };
         
+        console.log('[REGISTER] Updating managed signer with new data:', {
+          old_uuid: managedSigner.signer_uuid,
+          new_uuid: data.signer_uuid,
+          has_approval_url: !!data.signer_approval_url
+        });
+        
         // Update the managed signer state
         setManagedSigner(updatedSigner);
         
@@ -671,21 +695,19 @@ export default function ColorFrame({ context }: ColorFrameProps) {
         
         toast.success("Successfully got approval URL!");
         
-        // Restart polling with the new signer UUID
-        // First clear any existing interval
-        if (signerCheckIntervalRef.current) {
-          clearInterval(signerCheckIntervalRef.current);
-          signerCheckIntervalRef.current = null;
-        }
-        
-        startSignerApprovalPolling(data.signer_uuid);
+        // Start polling with the new signer UUID after a short delay
+        // to ensure state updates have propagated
+        console.log(`[REGISTER] Will start polling with new UUID: ${data.signer_uuid} after state update`);
+        setTimeout(() => {
+          startSignerApprovalPolling(data.signer_uuid);
+        }, 100);
       } else {
         // No approval URL was returned, but we might have had one before
         toast.error("No approval URL returned");
         
         // If we had an approval URL before, preserve it
         if (currentApprovalUrl) {
-          console.log('No new approval URL received, preserving existing one');
+          console.log('[REGISTER] No new approval URL received, preserving existing one');
           setManagedSigner(prev => ({
             ...prev!,
             signer_approval_url: currentApprovalUrl
@@ -693,10 +715,29 @@ export default function ColorFrame({ context }: ColorFrameProps) {
         }
       }
     } catch (error) {
-      console.error('Error in manual registration:', error);
-      toast.error("Registration failed: " + (error instanceof Error ? error.message : String(error)));
+      console.error('[REGISTER] Error in manual registration:', error);
+      
+      // Special handling for Maximum call stack size exceeded
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      if (errorMessage.includes('Maximum call stack size exceeded')) {
+        console.error('[REGISTER] Detected stack overflow error. Resetting state to recover...');
+        
+        // Clear any existing interval to break potential loops
+        if (signerCheckIntervalRef.current) {
+          clearInterval(signerCheckIntervalRef.current);
+          signerCheckIntervalRef.current = null;
+        }
+        
+        // Display a more helpful error message
+        toast.error("Registration process encountered a recursion error. Please try again in a moment.");
+      } else {
+        toast.error("Registration failed: " + errorMessage);
+      }
+      
+      setErrorMessage(errorMessage);
     } finally {
       toast.dismiss(toastId);
+      setIsCreatingSigner(false);
     }
   };
   
@@ -709,15 +750,25 @@ export default function ColorFrame({ context }: ColorFrameProps) {
       return;
     }
 
-    // Clear any existing interval
+    // Prevent starting polling if it's already in progress for this UUID
     if (signerCheckIntervalRef.current) {
-      clearInterval(signerCheckIntervalRef.current);
-      signerCheckIntervalRef.current = null;
-      console.log('[POLLING] Cleared existing polling interval');
+      console.log(`[POLLING] Polling already active. Checking UUID...`);
+      
+      // Only restart if we have a different UUID
+      const currentUuid = managedSigner?.signer_uuid;
+      if (currentUuid === signerUuid) {
+        console.log(`[POLLING] Already polling for UUID: ${signerUuid}, skipping redundant start`);
+        return;
+      } else {
+        console.log(`[POLLING] UUID changed from ${currentUuid} to ${signerUuid}, clearing existing interval`);
+        clearInterval(signerCheckIntervalRef.current);
+        signerCheckIntervalRef.current = null;
+      }
     }
     
     console.log('[POLLING] Setting isCheckingSigner to TRUE');
-    setIsCheckingSignerSafely(true);
+    // Use the setState directly to avoid potential recursion
+    setIsCheckingSigner(true); 
     console.log('[POLLING] Starting polling for signer:', signerUuid);
     
     // Track consecutive errors
@@ -832,7 +883,7 @@ export default function ColorFrame({ context }: ColorFrameProps) {
           }
           
           console.log('[POLLING] Setting isCheckingSigner to FALSE');
-          setIsCheckingSignerSafely(false);
+          setIsCheckingSigner(false);
           
           
           // Set the signer UUID for API calls
@@ -1051,15 +1102,170 @@ export default function ColorFrame({ context }: ColorFrameProps) {
 
   // Modification to isCheckingSigner state setting to be defensive
   const setIsCheckingSignerSafely = (value: boolean) => {
-    console.log(`[POLLING-SAFETY] Setting isCheckingSigner to ${value}`);
-    setIsCheckingSigner(value);
-    // If setting to true and we have a pending signer, ensure polling is active
-    if (value === true && managedSigner?.status === 'pending_approval' && managedSigner?.signer_uuid) {
-      if (!signerCheckIntervalRef.current) {
-        console.log('[POLLING-SAFETY] Detected polling should be active but interval is null. Restarting polling.');
-        startSignerApprovalPolling(managedSigner.signer_uuid);
+    // Prevent recursion
+    if (isSettingCheckingSafelyRef.current) {
+      console.log(`[POLLING-SAFETY] Preventing recursive call to setIsCheckingSignerSafely`);
+      return;
+    }
+    
+    try {
+      isSettingCheckingSafelyRef.current = true;
+      console.log(`[POLLING-SAFETY] Setting isCheckingSigner to ${value}`);
+      setIsCheckingSigner(value);
+      
+      // If setting to true and we have a pending signer, ensure polling is active
+      if (value === true && managedSigner?.status === 'pending_approval' && managedSigner?.signer_uuid) {
+        if (!signerCheckIntervalRef.current) {
+          console.log('[POLLING-SAFETY] Detected polling should be active but interval is null. Restarting polling.');
+          startSignerApprovalPolling(managedSigner.signer_uuid);
+        }
+      }
+    } finally {
+      isSettingCheckingSafelyRef.current = false;
+    }
+  };
+
+  // Add this new function after createManagedSigner
+  const checkForExistingSigners = async () => {
+    if (!address || !isConnected) {
+      console.log('[SIGNER-CHECK] Cannot check for existing signers without a connected wallet');
+      return null;
+    }
+    
+    console.log('[SIGNER-CHECK] Checking for existing signers for address:', address);
+    try {
+      // We need to get the user to sign a SIWE message
+      const toastId = toast.loading("Checking for existing signers...");
+      
+      // Generate a SIWE message
+      const domain = window.location.host;
+      const uri = window.location.origin;
+      const statement = "Sign in to check for existing Farcaster signers.";
+      const nonce = `nonce_${Math.floor(Math.random() * 1000000)}`;
+      const issuedAt = new Date().toISOString();
+      
+      const message = `${domain} wants you to sign in with your Ethereum account:\n${address}\n\n${statement}\n\nURI: ${uri}\nVersion: 1\nChain ID: 1\nNonce: ${nonce}\nIssued At: ${issuedAt}`;
+      
+      console.log('[SIGNER-CHECK] Generated SIWE message:', message);
+      
+      // Get the user to sign the message using the frame-sdk
+      let signature;
+      try {
+        signature = await (frameSdk as ExtendedFrameSdk).signMessage({ message });
+        console.log('[SIGNER-CHECK] Obtained signature:', signature);
+      } catch (signError) {
+        console.error('[SIGNER-CHECK] Failed to get signature:', signError);
+        toast.dismiss(toastId);
+        toast.error("Could not sign message to check for existing signers");
+        return null;
+      }
+      
+      if (!signature) {
+        console.error('[SIGNER-CHECK] No signature returned');
+        toast.dismiss(toastId);
+        return null;
+      }
+      
+      // Encode the message and signature for the URL
+      const encodedMessage = encodeURIComponent(message);
+      const encodedSignature = encodeURIComponent(signature);
+      
+      // Call our backend to proxy the request to Neynar
+      const response = await fetch(`/api/neynar/signer-list?message=${encodedMessage}&signature=${encodedSignature}`, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json'
+        }
+      });
+      
+      toast.dismiss(toastId);
+      
+      if (!response.ok) {
+        console.error('[SIGNER-CHECK] Error checking for existing signers:', await response.text());
+        return null;
+      }
+      
+      const data = await response.json();
+      console.log('[SIGNER-CHECK] Existing signers:', data);
+      
+      // Check if we have any approved signers
+      const approvedSigners = data?.signers?.filter((s: { status: string }) => s.status === 'approved');
+      
+      if (approvedSigners && approvedSigners.length > 0) {
+        console.log('[SIGNER-CHECK] Found approved signers:', approvedSigners);
+        toast.success(`Found ${approvedSigners.length} existing approved signer(s)`);
+        
+        // Use the first approved signer
+        const signer = approvedSigners[0];
+        return {
+          signer_uuid: signer.signer_uuid,
+          public_key: signer.public_key,
+          status: signer.status,
+          fid: signer.fid
+        };
+      } else {
+        console.log('[SIGNER-CHECK] No approved signers found');
+        return null;
+      }
+    } catch (error) {
+      console.error('[SIGNER-CHECK] Error checking for existing signers:', error);
+      toast.error("Failed to check for existing signers");
+      return null;
+    }
+  };
+
+  // Function to connect with Farcaster
+  const connectWithFarcaster = async () => {
+    // First check if we already have a saved signer in localStorage
+    const storedAuthData = localStorage.getItem('neynar_auth_data');
+    if (storedAuthData) {
+      try {
+        const signer = JSON.parse(storedAuthData) as ManagedSigner;
+        console.log('[CONNECT] Found stored signer:', signer);
+        
+        // If the signer is approved, use it directly
+        if (signer.status === 'approved' && signer.signer_uuid) {
+          setManagedSigner(signer);
+          setNeynarSignerUuid(signer.signer_uuid);
+          
+          // If we have an FID, fetch the user's profile picture
+          if (signer.fid) {
+            fetchUserProfilePicture(signer.fid);
+          }
+          
+          toast.success("Connected with existing signer!");
+          return true;
+        }
+      } catch (e) {
+        console.error('[CONNECT] Error parsing stored auth data:', e);
+        // Clear invalid data
+        localStorage.removeItem('neynar_auth_data');
+        localStorage.removeItem('neynar_auth_success');
       }
     }
+    
+    // Next, check if the user has any existing approved signers
+    const existingSigner = await checkForExistingSigners();
+    if (existingSigner) {
+      console.log('[CONNECT] Using existing approved signer:', existingSigner);
+      setManagedSigner(existingSigner);
+      setNeynarSignerUuid(existingSigner.signer_uuid);
+      
+      // If we have an FID, fetch the user's profile picture
+      if (existingSigner.fid) {
+        fetchUserProfilePicture(existingSigner.fid);
+      }
+      
+      // Store the signer in localStorage
+      localStorage.setItem('neynar_auth_data', JSON.stringify(existingSigner));
+      localStorage.setItem('neynar_auth_success', 'true');
+      
+      return true;
+    }
+    
+    // If we don't have any existing signers, create a new one
+    console.log('[CONNECT] No existing signers found, creating a new one');
+    return createManagedSigner();
   };
 
   if (!isInFrame) {
@@ -1247,7 +1453,7 @@ export default function ColorFrame({ context }: ColorFrameProps) {
                     <div className="w-full space-y-3">
                       <button
                         className="w-full py-3 px-4 rounded-lg font-medium bg-purple-600 text-white hover:bg-purple-700 transition-all"
-                        onClick={createManagedSigner}
+                        onClick={connectWithFarcaster}
                         disabled={isCreatingSigner}
                       >
                         {isCreatingSigner ? (
@@ -1256,7 +1462,7 @@ export default function ColorFrame({ context }: ColorFrameProps) {
                               <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
                               <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                             </svg>
-                            Creating Connection...
+                            Connecting...
                           </span>
                         ) : (
                           "Connect with Farcaster"
