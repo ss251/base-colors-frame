@@ -3,6 +3,19 @@ import { bytesToHex, hexToBytes } from "viem";
 import { mnemonicToAccount } from "viem/accounts";
 import neynarClient from "@/lib/neynarClient";
 
+// Define proper typing for sponsor options
+interface NeynarSponsor {
+  sponsored_by_neynar: true;
+}
+
+interface SelfSponsor {
+  sponsored_by_neynar: false;
+  signature: string;
+  fid: number;
+}
+
+type SponsorData = NeynarSponsor | SelfSponsor;
+
 // Function to get FID from mnemonic
 export const getFid = async () => {
   if (!process.env.FARCASTER_DEVELOPER_MNEMONIC) {
@@ -55,7 +68,7 @@ const generateSignature = async (publicKey: string) => {
 };
 
 // Main function to get a signed key
-export const getSignedKey = async () => {
+export const getSignedKey = async (sponsor = true, useSelfSponsorship = false) => {
   // Create a signer
   const createSigner = await neynarClient.createSigner();
   
@@ -69,14 +82,50 @@ export const getSignedKey = async () => {
   }
 
   const fid = await getFid();
+  
+  // Handle sponsorship based on parameters
+  let sponsorOption: SponsorData | undefined = undefined;
+  
+  if (sponsor) {
+    if (useSelfSponsorship) {
+      // We need to generate the sponsor signature
+      // This is for apps who want to sponsor directly (requires warps ≥ 100)
+      if (typeof process.env.FARCASTER_DEVELOPER_MNEMONIC === "undefined") {
+        throw new Error("FARCASTER_DEVELOPER_MNEMONIC is not defined");
+      }
+      
+      const account = mnemonicToAccount(process.env.FARCASTER_DEVELOPER_MNEMONIC);
+      // Sign the signature hex as a message
+      const sponsorSignature = await account.signMessage({
+        message: signature as `0x${string}`,
+      });
+      
+      sponsorOption = {
+        sponsored_by_neynar: false,
+        signature: sponsorSignature,
+        fid: fid,
+      };
+    } else {
+      // Use Neynar to sponsor the signer (charges compute units)
+      sponsorOption = {
+        sponsored_by_neynar: true
+      };
+    }
+  }
 
-  // Register the signed key with Neynar - corrected parameter structure
-  const signedKey = await neynarClient.registerSignedKey({
-    signerUuid: createSigner.signer_uuid,
-    signature,
-    appFid: fid,
-    deadline
-  });
+  try {
+    // Register the signed key with Neynar
+    const signedKey = await neynarClient.registerSignedKey({
+      signerUuid: createSigner.signer_uuid,
+      signature,
+      appFid: fid,
+      deadline,
+      sponsor: sponsorOption
+    });
 
-  return signedKey;
+    return signedKey;
+  } catch (error) {
+    console.error('Error registering signed key:', error);
+    throw error;
+  }
 }; 

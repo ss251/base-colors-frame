@@ -17,6 +17,7 @@ import { frameSdk, ExtendedFrameSdk } from '@/lib/frame-sdk';
 declare global {
   interface Window {
     onNeynarSignInSuccess: (data: NeynarSignInData) => void;
+    _lastPollTimestamp?: number;
   }
 }
 
@@ -481,6 +482,8 @@ export default function ColorFrame({ context }: ColorFrameProps) {
       // Clear any previous error state
       setErrorMessage(null);
       
+      // Create a new signer
+      console.log('[CREATE] Creating new signer');
       const response = await fetch('/api/neynar/signer', {
         method: 'POST',
         headers: {
@@ -494,7 +497,11 @@ export default function ColorFrame({ context }: ColorFrameProps) {
       }
       
       const signer = await response.json();
-      console.log('Created new managed signer:', signer);
+      console.log('[CREATE] Created new managed signer:', signer);
+      
+      // Store the original signer UUID to ensure we track the right one
+      const originalSignerUuid = signer.signer_uuid;
+      console.log(`[CREATE] Original signer UUID: ${originalSignerUuid}`);
       
       // Set the initial signer state
       setManagedSigner({
@@ -512,12 +519,13 @@ export default function ColorFrame({ context }: ColorFrameProps) {
       
       // We need to register the signer to get an approval URL
       try {
-        console.log('Auto-registering newly created signer...');
+        console.log('[CREATE] Auto-registering newly created signer...');
         
         // Update toast to show registration in progress
         toast.dismiss(toastId);
         const registerToastId = toast.loading("Getting approval URL...");
         
+        console.log(`[CREATE] Calling register-signer with UUID: ${signer.signer_uuid}`);
         const registerResponse = await fetch('/api/neynar/register-signer', {
           method: 'POST',
           headers: {
@@ -529,55 +537,55 @@ export default function ColorFrame({ context }: ColorFrameProps) {
         });
         
         if (!registerResponse.ok) {
-          console.error('Error auto-registering new signer:', await registerResponse.text());
+          console.error('[CREATE] Error auto-registering new signer:', await registerResponse.text());
           toast.dismiss(registerToastId);
           toast.error("Could not get approval URL automatically. Will try again in a moment.");
           
-          // We can still poll with the original UUID
-          startSignerApprovalPolling(signer.signer_uuid);
+          // We can still poll with the original UUID and preserve any state we have
+          startSignerApprovalPolling(originalSignerUuid);
           return;
         }
         
         const registeredSigner = await registerResponse.json();
-        console.log('Auto-registered signer result:', registeredSigner);
+        console.log('[CREATE] Auto-registered signer result:', registeredSigner);
+        
+        // VERY IMPORTANT: Check if the UUID changed during registration
+        const didUuidChange = registeredSigner.signer_uuid !== originalSignerUuid;
+        console.log(`[CREATE] Did signer UUID change? ${didUuidChange} (Original: ${originalSignerUuid}, New: ${registeredSigner.signer_uuid})`);
         
         // Dismiss the registration toast
         toast.dismiss(registerToastId);
         
-        if (registeredSigner.signer_approval_url) {
-          // Create an updated signer object with all the necessary fields
-          const updatedSigner = {
-            // Start with all fields from the original signer to ensure we don't lose anything
-            ...signer,
-            // Then override with the registration response
-            signer_uuid: registeredSigner.signer_uuid,
-            status: 'pending_approval',
-            signer_approval_url: registeredSigner.signer_approval_url,
-            public_key: registeredSigner.public_key || signer.public_key || ''
-          };
-          
-          // Update the state with the complete signer info
-          setManagedSigner(updatedSigner);
-          
-          // Update localStorage with the complete data
-          localStorage.setItem('neynar_auth_data', JSON.stringify(updatedSigner));
-          
-          // Start polling with the new signer UUID
-          startSignerApprovalPolling(registeredSigner.signer_uuid);
-          toast.success("Registration URL ready! Scan the QR code to approve.");
-        } else {
-          toast.error("Could not get approval URL, trying alternative method...");
-          // Fall back to polling with the original UUID
-          startSignerApprovalPolling(signer.signer_uuid);
-        }
+        // Update the managed signer with the response from registration
+        // This is CRITICAL: we must use the NEW UUID from registration
+        const updatedSigner: ManagedSigner = {
+          ...signer, // Base on original signer
+          signer_uuid: registeredSigner.signer_uuid, // Use the NEW UUID
+          public_key: registeredSigner.public_key || signer.public_key,
+          status: 'pending_approval',
+          signer_approval_url: registeredSigner.signer_approval_url
+        };
+        
+        console.log('[CREATE] Updated signer with registration data:', updatedSigner);
+        
+        // Update state with new UUID and keep approval URL
+        setManagedSigner(updatedSigner);
+        
+        // Save to localStorage with the new UUID
+        localStorage.setItem('neynar_auth_data', JSON.stringify(updatedSigner));
+        
+        // Start polling with the NEW signer UUID
+        console.log(`[CREATE] Starting polling with the NEW UUID: ${registeredSigner.signer_uuid}`);
+        startSignerApprovalPolling(registeredSigner.signer_uuid);
       } catch (regError) {
-        console.error('Error in auto-registration:', regError);
+        console.error('[CREATE] Error in auto-registration:', regError);
         toast.error("Registration error. Will try again automatically.");
-        // Fall back to normal polling
-        startSignerApprovalPolling(signer.signer_uuid);
+        // Fall back to normal polling with original UUID
+        console.log(`[CREATE] Starting polling with original UUID after error: ${originalSignerUuid}`);
+        startSignerApprovalPolling(originalSignerUuid);
       }
     } catch (error) {
-      console.error('Error creating managed signer:', error);
+      console.error('[CREATE] Error creating managed signer:', error);
       toast.error(`Failed to create signer: ${error instanceof Error ? error.message : 'Unknown error'}`);
       setErrorMessage(error instanceof Error ? error.message : 'Failed to create signer');
     } finally {
@@ -599,6 +607,9 @@ export default function ColorFrame({ context }: ColorFrameProps) {
       // Clear any error state
       setErrorMessage(null);
       
+      // Store the current approval URL in case we need to preserve it
+      const currentApprovalUrl = managedSigner.signer_approval_url;
+      
       const response = await fetch('/api/neynar/register-signer', {
         method: 'POST',
         headers: {
@@ -613,6 +624,17 @@ export default function ColorFrame({ context }: ColorFrameProps) {
         const errorText = await response.text();
         console.error('Manual registration error:', errorText);
         toast.error("Failed to register: " + errorText);
+        
+        // If registration fails but we had an approval URL, preserve it
+        if (currentApprovalUrl) {
+          console.log('Preserving existing approval URL after registration failure');
+          // Keep existing approval URL in case of failure
+          setManagedSigner(prev => ({
+            ...prev!,
+            signer_approval_url: currentApprovalUrl
+          }));
+        }
+        
         return;
       }
       
@@ -648,7 +670,17 @@ export default function ColorFrame({ context }: ColorFrameProps) {
         
         startSignerApprovalPolling(data.signer_uuid);
       } else {
+        // No approval URL was returned, but we might have had one before
         toast.error("No approval URL returned");
+        
+        // If we had an approval URL before, preserve it
+        if (currentApprovalUrl) {
+          console.log('No new approval URL received, preserving existing one');
+          setManagedSigner(prev => ({
+            ...prev!,
+            signer_approval_url: currentApprovalUrl
+          }));
+        }
       }
     } catch (error) {
       console.error('Error in manual registration:', error);
@@ -663,187 +695,213 @@ export default function ColorFrame({ context }: ColorFrameProps) {
     // Clear any existing interval
     if (signerCheckIntervalRef.current) {
       clearInterval(signerCheckIntervalRef.current);
+      signerCheckIntervalRef.current = null;
+      console.log('[POLLING] Cleared existing polling interval');
     }
     
-    setIsCheckingSigner(true);
+    console.log('[POLLING] Setting isCheckingSigner to TRUE');
+    setIsCheckingSignerSafely(true);
+    console.log('[POLLING] Starting polling for signer:', signerUuid);
     
-    // Start polling every 3 seconds
-    signerCheckIntervalRef.current = setInterval(async () => {
+    // Track consecutive errors
+    let consecutiveErrors = 0;
+    const MAX_CONSECUTIVE_ERRORS = 5;
+    
+    // Wrap the entire polling function in a try-catch to ensure the interval survives any errors
+    const pollFunction = async () => {
+      // Track when this poll happened for health checking
+      window._lastPollTimestamp = Date.now();
+      
+      // Track when we start this polling iteration
+      const iterationStartTime = Date.now();
+      console.log(`[POLLING] Poll iteration started at ${new Date().toISOString()}`);
+      
       try {
-        // Use our improved signer-status endpoint
-        const response = await fetch(`/api/neynar/signer-status?signer_uuid=${signerUuid}`);
+        // Store the current signer UUID we're going to check
+        const signerUuidToCheck = managedSigner?.signer_uuid;
+        console.log(`[POLLING] Using signer UUID for this poll: ${signerUuidToCheck}`);
         
-        if (!response.ok) {
-          console.error('Error checking signer status:', await response.text());
-          // Don't update the state on error, just return early
+        if (!signerUuidToCheck) {
+          console.error("[ERROR] No signer UUID available for polling");
           return;
         }
+
+        // Use our improved signer-status endpoint with no caching
+        const response = await fetch(`/api/neynar/signer-status?signer_uuid=${signerUuidToCheck}`, {
+          method: 'GET',
+          cache: 'no-store'
+        });
+        
+        if (!response.ok) {
+          const errorText = await response.text();
+          console.error(`[POLLING] Error checking signer status (${response.status}): ${errorText}`);
+          consecutiveErrors++;
+          if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
+            console.error(`[POLLING] Reached ${MAX_CONSECUTIVE_ERRORS} consecutive errors, but will continue polling`);
+            // We won't clear the interval, just log the error
+          }
+          return; // Return early but don't stop polling
+        }
+        
+        // Reset consecutive errors on success
+        consecutiveErrors = 0;
         
         const signer = await response.json();
-        console.log('Signer status check:', signer);
+        console.log('[POLLING] Signer status check result:', JSON.stringify(signer));
+        
+        // Add debugging for current state
+        console.log('[POLLING] BEFORE UPDATE - Current managedSigner state:', 
+          managedSigner ? JSON.stringify({
+            signer_uuid: managedSigner.signer_uuid,
+            status: managedSigner.status,
+            has_url: !!managedSigner.signer_approval_url,
+            fid: managedSigner.fid
+          }) : 'null');
         
         // Check if the response contains error or if essential properties are missing
         if (signer.error || (!signer.status && !signer.signer_uuid)) {
-          console.error('Invalid signer response:', signer);
-          // Don't update state for invalid responses
-          return;
+          console.error('[POLLING] Invalid signer response:', JSON.stringify(signer));
+          return; // Return early but don't stop polling
         }
         
-        // If we have a valid signer response, proceed with updating state
-        // Make sure we preserve the approval URL even if it's not in the new response
-        if (managedSigner?.signer_approval_url && !signer.signer_approval_url && signer.status === 'pending_approval') {
-          // Keep the existing approval URL to prevent the QR code from disappearing
-          signer.signer_approval_url = managedSigner.signer_approval_url;
-        }
+        // Get the current managed signer state
+        const currentSigner = managedSigner || {
+          signer_uuid: '',
+          public_key: '',
+          status: 'pending_approval' as const,
+          signer_approval_url: '',
+          fid: undefined
+        };
         
-        // Update the signer state with the merged data
-        setManagedSigner(prevSigner => {
-          if (!prevSigner) return signer;
-          
-          // Create merged signer object that preserves important fields
-          return {
-            ...prevSigner,
-            ...signer,
-            // Ensure we don't lose the approval URL if we had one before
-            signer_approval_url: signer.signer_approval_url || prevSigner.signer_approval_url
-          };
-        });
+        // CRITICALLY IMPORTANT: Use the snapshot from the start of this iteration
+        // This prevents any race conditions where the state might have changed
+        const currentApprovalUrl = currentSigner.signer_approval_url || '';
         
-        // If the signer is in "generated" status, immediately call the registration endpoint to get an approval URL
-        if (signer.status === 'generated') {
-          try {
-            console.log('Signer is in "generated" state, registering signer...');
-            const registerResponse = await fetch('/api/neynar/register-signer', {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json'
-              },
-              body: JSON.stringify({
-                signer_uuid: signer.signer_uuid
-              })
-            });
-            
-            if (!registerResponse.ok) {
-              const errorText = await registerResponse.text();
-              console.error('Error registering signer:', errorText);
-              toast.error("Unable to get connection link. Please try again.");
-              return;
-            }
-            
-            const registeredSigner = await registerResponse.json();
-            console.log('Registered signer:', registeredSigner);
-            
-            // Only update if we have an approval URL
-            if (registeredSigner.signer_approval_url) {
-              // Update signer with the new signer_uuid and approval URL
-              setManagedSigner(prevSigner => ({
-                ...(prevSigner || {}),
-                signer_uuid: registeredSigner.signer_uuid, // Use the new UUID
-                status: registeredSigner.status || 'pending_approval',
-                signer_approval_url: registeredSigner.signer_approval_url,
-                public_key: registeredSigner.public_key || (prevSigner?.public_key || '')
-              }));
-              
-              // Update localStorage with the updated signer
-              const updatedSigner = {
-                ...(managedSigner || {}),
-                signer_uuid: registeredSigner.signer_uuid,
-                status: registeredSigner.status || 'pending_approval',
-                signer_approval_url: registeredSigner.signer_approval_url,
-                public_key: registeredSigner.public_key || (managedSigner?.public_key || '')
-              };
-              
-              localStorage.setItem('neynar_auth_data', JSON.stringify(updatedSigner));
-              
-              // Restart polling with the new signer UUID
-              clearInterval(signerCheckIntervalRef.current!);
-              startSignerApprovalPolling(registeredSigner.signer_uuid);
-              
-              toast.success("Connection link ready! Please scan the QR code to connect.");
-            } else {
-              // If no approval URL came back, wait for the next polling cycle
-              console.log('No approval URL returned, waiting for next poll cycle');
-              toast.error("Unable to get connection link. Trying again...");
-            }
-          } catch (regError) {
-            console.error('Error registering signer:', regError);
-            toast.error("Connection error. Please try again.");
-          }
-        }
+        // Create a proper update that preserves important data
+        const updatedSigner = {
+          ...currentSigner,
+          signer_uuid: signer.signer_uuid || currentSigner.signer_uuid,
+          public_key: signer.public_key || currentSigner.public_key || '',
+          // IMPORTANT: Check explicitly for "approved" status from the API response
+          status: signer.status === 'approved' ? 'approved' : 'pending_approval',
+          // CRITICAL: Always preserve the approval URL if it's missing in the response
+          // Use the snapshot from the start of the iteration as the highest priority backup
+          signer_approval_url: signer.signer_approval_url || currentApprovalUrl || currentApprovalUrl,
+          fid: signer.fid || currentSigner.fid
+        };
         
-        // If the signer is approved, stop polling and update state
+        // Always ensure we keep the QR code URL in the state
+        setManagedSigner(updatedSigner);
+        
+        // Also update localStorage to ensure data persistence
+        localStorage.setItem('neynar_auth_data', JSON.stringify(updatedSigner));
+        
+        // Debug the updated state
+        console.log('[POLLING] AFTER UPDATE - Updated managedSigner:', JSON.stringify({
+          signer_uuid: updatedSigner.signer_uuid,
+          status: updatedSigner.status,
+          has_url: !!updatedSigner.signer_approval_url,
+          url_length: updatedSigner.signer_approval_url?.length,
+          fid: updatedSigner.fid
+        }));
+        
+        // If the signer is approved, we can stop polling and update the state
         if (signer.status === 'approved') {
+          console.log('[POLLING] SIGNER IS APPROVED! 🎉 Stopping polling');
           if (signerCheckIntervalRef.current) {
             clearInterval(signerCheckIntervalRef.current);
             signerCheckIntervalRef.current = null;
           }
           
-          setIsCheckingSigner(false);
-          
-          // Update localStorage with the approved signer
-          localStorage.setItem('neynar_auth_data', JSON.stringify(signer));
+          console.log('[POLLING] Setting isCheckingSigner to FALSE');
+          setIsCheckingSignerSafely(false);
+          toast.success('Farcaster connection approved!');
           
           // Set the signer UUID for API calls
           setNeynarSignerUuid(signer.signer_uuid);
           
-          toast.success("Connected successfully! You can now update your profile picture.");
-          
-          // If we have an FID, fetch the user's profile picture
+          // If we have an FID, fetch the user's profile
           if (signer.fid) {
             fetchUserProfilePicture(signer.fid);
           }
-          
-          // Add redirection to the frame - similar to colorino approach
-          if (isInFrame) {
-            // Show success message
-            toast.success("Connected successfully! Returning to app...", {
-              duration: 1500,
-            });
-            
-            // Auto-close the frame after a brief delay and redirect
-            setTimeout(() => {
-              try {
-                // Close the frame and redirect to Warpcast
-                frameSdkOriginal.actions.close();
-                console.log("Frame closed after signer approval");
-                
-                // Redirect to Warpcast with the frame domain as a parameter
-                setTimeout(() => {
-                  window.location.href = 'https://warpcast.com/?launchFrameDomain=base-colors-frame.vercel.app';
-                }, 500);
-              } catch (error) {
-                console.error("Error closing frame:", error);
-                // Fallback redirect
-                window.location.href = 'https://warpcast.com/?launchFrameDomain=base-colors-frame.vercel.app';
-              }
-            }, 1500);
-          }
+        } else {
+          console.log(`[POLLING] Signer not yet approved, continuing to poll. Current status: ${signer.status}`);
+        }
+        
+        // Handle failed/rejected status, but DON'T remove QR code
+        if (signer.status === 'failed' || signer.status === 'rejected') {
+          console.log('[POLLING] Signer status is failed/rejected but keeping QR code visible');
+          toast.error('Connection approval failed. Please try scanning the QR code again.');
+          // Note: We're NOT clearing the interval here to allow retries
         }
       } catch (error) {
-        console.error('Error polling for signer approval:', error);
-        // Don't change state on unexpected errors
+        consecutiveErrors++;
+        console.error('[POLLING] Error in polling function:', error);
+        
+        // Even if we have errors, we want to continue polling
+        if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
+          console.error(`[POLLING] Reached ${MAX_CONSECUTIVE_ERRORS} consecutive errors, but will continue polling`);
+        }
+      } finally {
+        // Log how long this iteration took
+        const iterationTime = Date.now() - iterationStartTime;
+        console.log(`[POLLING] Poll iteration completed in ${iterationTime}ms`);
       }
-    }, 3000);
+    };
+    
+    // Start polling immediately
+    pollFunction();
+    
+    // Then set up interval with our wrapped poll function
+    signerCheckIntervalRef.current = setInterval(pollFunction, 3000);
+    
+    console.log(`[POLLING] Polling interval set: ${typeof signerCheckIntervalRef.current} ${signerCheckIntervalRef.current ? '(valid)' : '(invalid)'}`);
+    
+    // Schedule a check after 10 seconds to verify polling is still active
+    setTimeout(() => {
+      console.log(`[POLLING-CHECK] After 10s: Is polling active? ${signerCheckIntervalRef.current ? 'YES' : 'NO'}`);
+      if (!signerCheckIntervalRef.current) {
+        console.log('[POLLING-CHECK] Polling is not active. Attempting to restart...');
+        startSignerApprovalPolling(signerUuid);
+      }
+    }, 10000);
+    
+    // Schedule another check after 30 seconds
+    setTimeout(() => {
+      console.log(`[POLLING-CHECK] After 30s: Is polling active? ${signerCheckIntervalRef.current ? 'YES' : 'NO'}`);
+      if (!signerCheckIntervalRef.current) {
+        console.log('[POLLING-CHECK] Polling is not active. Attempting to restart...');
+        startSignerApprovalPolling(signerUuid);
+      }
+    }, 30000);
   };
   
   // Clean up interval on component unmount
   useEffect(() => {
     return () => {
       if (signerCheckIntervalRef.current) {
+        console.log('[POLLING] Cleaning up polling interval on unmount');
         clearInterval(signerCheckIntervalRef.current);
+        signerCheckIntervalRef.current = null;
       }
     };
   }, []);
   
+  // After the other useEffect hooks, add this one to track isCheckingSigner changes
+  useEffect(() => {
+    console.log('[STATUS] isCheckingSigner changed to:', isCheckingSigner);
+  }, [isCheckingSigner]);
+
   // Use this effect to log the important values on each render
   useEffect(() => {
     console.log('Render evaluation:', {
       isAuthenticated,
       managedSignerStatus: managedSigner?.status,
       managedSignerFid: managedSigner?.fid,
+      isCheckingSigner,
       conditionResult: managedSigner?.status === 'approved' || (managedSigner?.status === 'unknown' && managedSigner?.fid)
     });
-  }, [isAuthenticated, managedSigner?.status, managedSigner?.fid]);
+  }, [isAuthenticated, managedSigner?.status, managedSigner?.fid, isCheckingSigner]);
 
   // Check for stored signer on component mount
   useEffect(() => {
@@ -910,6 +968,40 @@ export default function ColorFrame({ context }: ColorFrameProps) {
     
     checkStoredSigner();
   }, []);
+
+  // Replace the existing useEffect for polling health check with this improved version
+  useEffect(() => {
+    // Setup a heartbeat to check that polling is active
+    const pollHealthCheckInterval = setInterval(() => {
+      if (managedSigner?.status === 'pending_approval' && managedSigner?.signer_uuid) {
+        const isPollingActive = signerCheckIntervalRef.current !== null;
+        console.log(`[POLLING-HEARTBEAT] Status: ${isPollingActive ? 'ACTIVE' : 'INACTIVE'}, Signer status: ${managedSigner.status}`);
+        
+        // If polling should be active but isn't, restart it
+        if (!isPollingActive) {
+          console.log('[POLLING-HEARTBEAT] Polling is inactive but should be running. Restarting...');
+          startSignerApprovalPolling(managedSigner.signer_uuid);
+        }
+      }
+    }, 5000); // Check every 5 seconds
+    
+    return () => {
+      clearInterval(pollHealthCheckInterval);
+    };
+  }, [managedSigner?.status, managedSigner?.signer_uuid]);
+
+  // Modification to isCheckingSigner state setting to be defensive
+  const setIsCheckingSignerSafely = (value: boolean) => {
+    console.log(`[POLLING-SAFETY] Setting isCheckingSigner to ${value}`);
+    setIsCheckingSigner(value);
+    // If setting to true and we have a pending signer, ensure polling is active
+    if (value === true && managedSigner?.status === 'pending_approval' && managedSigner?.signer_uuid) {
+      if (!signerCheckIntervalRef.current) {
+        console.log('[POLLING-SAFETY] Detected polling should be active but interval is null. Restarting polling.');
+        startSignerApprovalPolling(managedSigner.signer_uuid);
+      }
+    }
+  };
 
   if (!isInFrame) {
     return (
@@ -1122,7 +1214,7 @@ export default function ColorFrame({ context }: ColorFrameProps) {
                       </div>
                     </div>
                   </>
-                ) : managedSigner?.status === 'pending_approval' ? (
+                ) : managedSigner?.status === 'pending_approval' || managedSigner?.signer_approval_url ? (
                   <>
                     <h3 className="text-xl font-medium mb-3 text-white">Approve Connection</h3>
                     <p className="text-slate-300 mb-4 text-sm">
@@ -1145,9 +1237,15 @@ export default function ColorFrame({ context }: ColorFrameProps) {
                         </a>
                       )}
                       {isCheckingSigner && (
-                        <p className="mt-3 text-sm text-slate-400">
-                          Waiting for approval... This page will update automatically.
-                        </p>
+                        <div className="mt-3 p-2 bg-blue-900/30 border border-blue-500/30 rounded-lg">
+                          <p className="text-sm text-blue-300 flex items-center justify-center">
+                            <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-blue-300" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                            </svg>
+                            Waiting for approval... This page will update automatically.
+                          </p>
+                        </div>
                       )}
                       {!managedSigner.signer_approval_url && (
                         <div className="flex flex-col items-center my-4">
@@ -1202,25 +1300,78 @@ export default function ColorFrame({ context }: ColorFrameProps) {
                     )}
                   </>
                 ) : (
-                  <div className="p-4 text-center">
-                    <p className="text-slate-300">
-                      Something went wrong with your Farcaster connection. Please try again.
-                    </p>
-                    <button
-                      className="mt-3 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-all"
-                      onClick={() => {
-                        // Clear stored auth data
-                        localStorage.removeItem('neynar_auth_data');
-                        localStorage.removeItem('neynar_auth_success');
-                        // Reset state
-                        setManagedSigner(null);
-                        // Create a new managed signer
-                        createManagedSigner();
-                      }}
-                    >
-                      Try Again
-                    </button>
-                  </div>
+                    <div className="p-4 text-center">
+                      <p className="text-slate-300">
+                        Something went wrong with your Farcaster connection. Please try again.
+                      </p>
+                      <button
+                        className="mt-3 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-all"
+                        onClick={() => {
+                          console.log('[TRY-AGAIN] Try Again button clicked');
+                          
+                          // First, ensure any existing polling is stopped
+                          if (signerCheckIntervalRef.current) {
+                            console.log('[TRY-AGAIN] Clearing existing polling interval');
+                            clearInterval(signerCheckIntervalRef.current);
+                            signerCheckIntervalRef.current = null;
+                          }
+                          
+                          // First try to see if we can recover from localStorage
+                          try {
+                            console.log('[TRY-AGAIN] Checking localStorage for saved data');
+                            const savedData = localStorage.getItem('neynar_auth_data');
+                            if (savedData) {
+                              const parsedData = JSON.parse(savedData);
+                              if (parsedData.signer_approval_url) {
+                                console.log('[TRY-AGAIN] Recovered approval URL from localStorage:', parsedData.signer_approval_url);
+                                // We have a saved approval URL - use it instead of clearing everything
+                                const updatedSigner = {
+                                  ...parsedData,
+                                  status: 'pending_approval' // Force pending_approval status
+                                };
+                                
+                                // Update the state with recovered data
+                                setManagedSigner(updatedSigner);
+                                
+                                // Make sure isCheckingSigner is set to true to show the waiting message
+                                console.log('[TRY-AGAIN] Setting isCheckingSigner to TRUE');
+                                setIsCheckingSignerSafely(true);
+                                
+                                // Start polling with the recovered signer UUID
+                                if (parsedData.signer_uuid) {
+                                  console.log('[TRY-AGAIN] Starting polling with recovered UUID');
+                                  // Use setTimeout to ensure state is updated before polling starts
+                                  setTimeout(() => {
+                                    startSignerApprovalPolling(parsedData.signer_uuid);
+                                  }, 100);
+                                }
+                                return; // Skip the reset
+                              }
+                            }
+                          } catch (e) {
+                            console.error('[TRY-AGAIN] Error trying to recover from localStorage:', e);
+                          }
+                          
+                          // If recovery failed, do a full reset
+                          console.log('[TRY-AGAIN] Recovery failed, performing full reset');
+                          localStorage.removeItem('neynar_auth_data');
+                          localStorage.removeItem('neynar_auth_success');
+                          
+                          // Reset state safely
+                          setManagedSigner(null);
+                          setIsCheckingSignerSafely(false); // Reset this flag
+                          setErrorMessage(null); // Clear any error messages
+                          
+                          // Create a new managed signer after a short delay to ensure state is updated
+                          console.log('[TRY-AGAIN] Creating new managed signer after reset');
+                          setTimeout(() => {
+                            createManagedSigner();
+                          }, 200);
+                        }}
+                      >
+                        Try Again
+                      </button>
+                    </div>
                 )}
               </div>
             )}

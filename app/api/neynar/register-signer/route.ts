@@ -3,13 +3,15 @@ import { getSignedKey } from '@/app/utils/getSignedKey';
 
 interface RequestBody {
   signer_uuid: string;
+  sponsor?: boolean; // New parameter to indicate if the signer should be sponsored
+  useSelfSponsorship?: boolean; // New parameter to specify self-sponsorship
 }
 
 export async function POST(request: NextRequest) {
   try {
     // Parse the request body
     const body = await request.json() as RequestBody;
-    const { signer_uuid } = body;
+    const { signer_uuid, sponsor = true, useSelfSponsorship = false } = body; // Default to sponsoring with Neynar
     
     // Validate the required parameters
     if (!signer_uuid) {
@@ -19,6 +21,7 @@ export async function POST(request: NextRequest) {
     }
     
     console.log(`Registering signer with UUID: ${signer_uuid}`);
+    console.log(`Sponsoring signer: ${sponsor}, Self-sponsorship: ${useSelfSponsorship}`);
     
     // Use a direct API call to Neynar to register the signer
     const NEYNAR_API_KEY = process.env.NEYNAR_API_KEY;
@@ -29,9 +32,9 @@ export async function POST(request: NextRequest) {
     }
 
     try {
-      // First, get a signed key for the signer
-      // This will return an object that already has the necessary registration info
-      const signedKey = await getSignedKey();
+      // First, get a signed key for the signer with sponsorship
+      // We pass the sponsor flag and self-sponsorship option to getSignedKey
+      const signedKey = await getSignedKey(sponsor, useSelfSponsorship);
       console.log('Signed key result:', signedKey);
       
       // Use the signer_uuid from the signedKey result instead of the request
@@ -40,7 +43,9 @@ export async function POST(request: NextRequest) {
         signer_uuid: signedKey.signer_uuid, // Use this UUID instead of the request one
         status: 'pending_approval',
         public_key: signedKey.public_key || '',
-        signer_approval_url: signedKey.signer_approval_url
+        signer_approval_url: signedKey.signer_approval_url,
+        sponsored: sponsor,
+        sponsorshipMethod: useSelfSponsorship ? 'self' : 'neynar'
       });
       
     } catch (error) {
