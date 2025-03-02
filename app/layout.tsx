@@ -9,20 +9,20 @@ const inter = Inter({ subsets: ["latin"] });
 
 // Generate metadata with frame support for Farcaster
 export function generateMetadata(): Metadata {
-  const url = process.env.NEXT_PUBLIC_BASE_URL || "https://bountycaster-basecolors.vercel.app";
+  const url = process.env.NEXT_PUBLIC_BASE_URL || "https://base-colors-frame.vercel.app";
   
   return {
     metadataBase: new URL(url),
     title: "Base Colors PFP",
     description: "Change your Farcaster profile picture to any Base Colors you own",
     openGraph: {
-      images: ["/base-colors-og.svg"],
+      images: [`${url}/base-colors-og.svg`],
       title: "Base Colors PFP",
       description: "Change your Farcaster profile picture to any Base Colors you own",
     },
     icons: {
-      icon: '/basecolors_logo.png',
-      apple: '/basecolors_logo.png',
+      icon: `${url}/basecolors_logo.png`,
+      apple: `${url}/basecolors_logo.png`,
     },
     other: {
       "fc:frame": JSON.stringify({

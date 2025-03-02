@@ -1,8 +1,8 @@
 <svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 1200 630" width="1200" height="630">
   <rect width="1200" height="630" fill="#0F2352" />
   
-  <!-- Base Colors Logo -->
-  <image x="500" y="50" width="200" height="200" xlink:href="/basecolors_logo.png" />
+  <!-- Base Colors Logo with absolute URL -->
+  <image x="500" y="50" width="200" height="200" xlink:href="https://base-colors-frame.vercel.app/basecolors_logo.png" />
   
   <!-- Grid of color squares -->
   <g id="colorGrid">

@@ -1417,7 +1417,7 @@ export default function ColorFrame({ context }: ColorFrameProps) {
             className="w-10 h-10 mr-3" 
           />
           <h1 className="text-3xl font-bold text-white">
-            Base Colors
+            Base Colors PFP
           </h1>
         </div>
         
