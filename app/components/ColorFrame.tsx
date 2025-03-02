@@ -1410,9 +1410,16 @@ export default function ColorFrame({ context }: ColorFrameProps) {
           }}
         />
         
-        <h1 className="text-3xl font-bold mb-5 text-white text-center">
-          Base Colors
-        </h1>
+        <div className="flex items-center justify-center mb-5">
+          <img 
+            src="/basecolors_logo.png" 
+            alt="Base Colors Logo" 
+            className="w-10 h-10 mr-3" 
+          />
+          <h1 className="text-3xl font-bold text-white">
+            Base Colors
+          </h1>
+        </div>
         
         {!isConnected ? (
           <div className="bg-[#0C1428] rounded-xl p-5 mb-4">

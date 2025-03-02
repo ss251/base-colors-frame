@@ -13,12 +13,16 @@ export function generateMetadata(): Metadata {
   
   return {
     metadataBase: new URL(url),
-    title: "Base Colors PFP Manager",
+    title: "Base Colors PFP",
     description: "Change your Farcaster profile picture to any Base Colors you own",
     openGraph: {
       images: ["/base-colors-og.svg"],
-      title: "Base Colors PFP Manager",
+      title: "Base Colors PFP",
       description: "Change your Farcaster profile picture to any Base Colors you own",
+    },
+    icons: {
+      icon: '/basecolors_logo.png',
+      apple: '/basecolors_logo.png',
     },
     other: {
       "fc:frame": JSON.stringify({
@@ -31,7 +35,7 @@ export function generateMetadata(): Metadata {
             name: "Base Colors PFP",
             url: url,
             splashImageUrl: `${url}/splash.svg`,
-            splashBackgroundColor: "#1E40AF",
+            splashBackgroundColor: "#0F2352",
           },
         },
       }),
