@@ -709,6 +709,12 @@ export default function ColorFrame({ context }: ColorFrameProps) {
       return;
     }
 
+    // Check if we already have an approved signer - if so, don't start polling
+    if (managedSigner?.status === 'approved') {
+      console.log('[POLLING] Signer is already approved, skipping polling');
+      return;
+    }
+
     // Clear any existing interval
     if (signerCheckIntervalRef.current) {
       clearInterval(signerCheckIntervalRef.current);
@@ -791,6 +797,9 @@ export default function ColorFrame({ context }: ColorFrameProps) {
           fid: undefined
         };
         
+        // Get the previous status to detect transitions
+        const previousStatus = currentSigner.status;
+        
         // CRITICALLY IMPORTANT: Use the snapshot from the start of this iteration
         // This prevents any race conditions where the state might have changed
         const currentApprovalUrl = currentSigner.signer_approval_url || '';
@@ -833,7 +842,13 @@ export default function ColorFrame({ context }: ColorFrameProps) {
           
           console.log('[POLLING] Setting isCheckingSigner to FALSE');
           setIsCheckingSignerSafely(false);
-          toast.success('Farcaster connection approved!');
+          
+          // Only show the toast if we've transitioned from pending to approved
+          // This prevents showing the toast every time the component loads with an already approved signer
+          if (previousStatus === 'pending_approval') {
+            console.log('[POLLING] Status changed from pending to approved, showing success toast');
+            toast.success('Farcaster connection approved!');
+          }
           
           // Set the signer UUID for API calls
           setNeynarSignerUuid(signer.signer_uuid);
@@ -958,13 +973,12 @@ export default function ColorFrame({ context }: ColorFrameProps) {
             // Now update state with potentially corrected data
             setManagedSigner(signer);
             
-            // If the signer is pending approval, start polling
+            // Only start polling if signer exists, is pending approval, and has a UUID
             if (signer.status === 'pending_approval' && signer.signer_uuid) {
+              console.log('[STORED-SIGNER] Starting polling for pending signer');
               startSignerApprovalPolling(signer.signer_uuid);
-            }
-            
-            // If the signer is approved, set the signer UUID for API calls
-            if (signer.status === 'approved') {
+            } else if (signer.status === 'approved') {
+              console.log('[STORED-SIGNER] Signer already approved, not starting polling');
               setNeynarSignerUuid(signer.signer_uuid);
               
               // If we have an FID, fetch the user's profile picture
@@ -991,54 +1005,64 @@ export default function ColorFrame({ context }: ColorFrameProps) {
   useEffect(() => {
     // Setup a heartbeat to check that polling is active
     const pollHealthCheckInterval = setInterval(() => {
-      // Check if we have a managed signer with pending_approval status
-      if (managedSigner?.status === 'pending_approval') {
-        // First check: Is polling active via the interval?
-        const isPollingActive = signerCheckIntervalRef.current !== null;
-        
-        // Second check: When was the last poll?
-        const lastPollTime = window._lastPollTimestamp || 0;
-        const timeSinceLastPoll = Date.now() - lastPollTime;
-        
-        // Log the current state with detailed info
-        console.log(`[POLLING-HEARTBEAT] Status: ${isPollingActive ? 'ACTIVE' : 'INACTIVE'}, Signer status: ${managedSigner.status}`);
-        console.log(`[POLLING-HEARTBEAT] Time since last poll: ${timeSinceLastPoll}ms`);
-        
-        // Get a valid UUID to use for polling - critical check
-        const validUuid = managedSigner.signer_uuid;
-        
-        // Check if we need to restart polling
-        const needsRestart = 
-          // Polling is not active but should be
-          (!isPollingActive && managedSigner.status === 'pending_approval') ||
-          // OR polling is active but hasn't run in over 10 seconds (stuck?)
-          (isPollingActive && timeSinceLastPoll > 10000);
-        
-        if (needsRestart && validUuid) {
-          console.log('[POLLING-HEARTBEAT] Polling needs restart. Restarting with UUID:', validUuid);
+      // Only proceed if we have a managed signer
+      if (managedSigner) {
+        // Check if the signer is in pending_approval state
+        if (managedSigner.status === 'pending_approval') {
+          // First check: Is polling active via the interval?
+          const isPollingActive = signerCheckIntervalRef.current !== null;
           
-          // Clean up any existing interval
+          // Second check: When was the last poll?
+          const lastPollTime = window._lastPollTimestamp || 0;
+          const timeSinceLastPoll = Date.now() - lastPollTime;
+          
+          // Log the current state with detailed info
+          console.log(`[POLLING-HEARTBEAT] Status: ${isPollingActive ? 'ACTIVE' : 'INACTIVE'}, Signer status: ${managedSigner.status}`);
+          console.log(`[POLLING-HEARTBEAT] Time since last poll: ${timeSinceLastPoll}ms`);
+          
+          // Get a valid UUID to use for polling - critical check
+          const validUuid = managedSigner.signer_uuid;
+          
+          // Check if we need to restart polling
+          const needsRestart = 
+            // Polling is not active but should be
+            (!isPollingActive && managedSigner.status === 'pending_approval') ||
+            // OR polling is active but hasn't run in over 10 seconds (stuck?)
+            (isPollingActive && timeSinceLastPoll > 10000);
+          
+          if (needsRestart && validUuid) {
+            console.log('[POLLING-HEARTBEAT] Polling needs restart. Restarting with UUID:', validUuid);
+            
+            // Clean up any existing interval
+            if (signerCheckIntervalRef.current) {
+              clearInterval(signerCheckIntervalRef.current);
+              signerCheckIntervalRef.current = null;
+            }
+            
+            // Restart polling with the valid UUID
+            startSignerApprovalPolling(validUuid);
+          } else if (needsRestart && !validUuid) {
+            console.error('[POLLING-HEARTBEAT] Polling needs restart but no valid UUID available');
+            // Try to recover from localStorage
+            try {
+              const savedData = localStorage.getItem('neynar_auth_data');
+              if (savedData) {
+                const parsedData = JSON.parse(savedData);
+                if (parsedData.signer_uuid) {
+                  console.log('[POLLING-HEARTBEAT] Recovered UUID from localStorage:', parsedData.signer_uuid);
+                  startSignerApprovalPolling(parsedData.signer_uuid);
+                }
+              }
+            } catch (e) {
+              console.error('[POLLING-HEARTBEAT] Error recovering UUID from localStorage:', e);
+            }
+          }
+        } else if (managedSigner.status === 'approved') {
+          // If the signer is approved, make sure polling is stopped
           if (signerCheckIntervalRef.current) {
+            console.log('[POLLING-HEARTBEAT] Signer is approved but polling is still active. Stopping polling.');
             clearInterval(signerCheckIntervalRef.current);
             signerCheckIntervalRef.current = null;
-          }
-          
-          // Restart polling with the valid UUID
-          startSignerApprovalPolling(validUuid);
-        } else if (needsRestart && !validUuid) {
-          console.error('[POLLING-HEARTBEAT] Polling needs restart but no valid UUID available');
-          // Try to recover from localStorage
-          try {
-            const savedData = localStorage.getItem('neynar_auth_data');
-            if (savedData) {
-              const parsedData = JSON.parse(savedData);
-              if (parsedData.signer_uuid) {
-                console.log('[POLLING-HEARTBEAT] Recovered UUID from localStorage:', parsedData.signer_uuid);
-                startSignerApprovalPolling(parsedData.signer_uuid);
-              }
-            }
-          } catch (e) {
-            console.error('[POLLING-HEARTBEAT] Error recovering UUID from localStorage:', e);
           }
         }
       }
