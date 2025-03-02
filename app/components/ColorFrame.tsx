@@ -833,7 +833,7 @@ export default function ColorFrame({ context }: ColorFrameProps) {
           
           console.log('[POLLING] Setting isCheckingSigner to FALSE');
           setIsCheckingSignerSafely(false);
-          toast.success('Farcaster connection approved!');
+          
           
           // Set the signer UUID for API calls
           setNeynarSignerUuid(signer.signer_uuid);
