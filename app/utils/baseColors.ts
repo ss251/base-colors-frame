@@ -1,12 +1,64 @@
-const BASE_COLORS_CONTRACT = process.env.NEXT_PUBLIC_BASE_COLORS_CONTRACT || '0x7Bc1C072742D8391817EB4Eb2317F98dc72C61dB';
+import { createPublicClient, http } from 'viem';
+import { base } from 'viem/chains';
+import { parseAbiItem } from 'viem';
+
+// Contract address for Base Colors from environment variable
+const BASE_COLORS_CONTRACT = process.env.NEXT_PUBLIC_BASE_COLORS_CONTRACT as `0x${string}`;
 // Provide a dummy fallback API key for testing - should be replaced with a real key in production
 const ALCHEMY_API_KEY = process.env.NEXT_PUBLIC_ALCHEMY_API_KEY || 'demo';
+
+// Create a public client for Base mainnet
+const publicClient = createPublicClient({
+  chain: base,
+  transport: http()
+});
+
+// ABI for the getAttributesAsJson function
+const getAttributesAbi = parseAbiItem('function getAttributesAsJson(uint256 tokenId) view returns (string)');
+
+// Function to fetch color name from smart contract
+export async function getColorNameFromContract(tokenId: string): Promise<string | null> {
+  try {
+    // Call the contract's getAttributesAsJson function
+    const attributesJson = await publicClient.readContract({
+      address: BASE_COLORS_CONTRACT,
+      abi: [getAttributesAbi],
+      functionName: 'getAttributesAsJson',
+      args: [BigInt(tokenId)]
+    }) as string;
+
+    // Parse the JSON response
+    const attributes = JSON.parse(attributesJson);
+    
+    // Find the color name attribute
+    const colorNameAttribute = attributes.find((attr: { trait_type: string; value: string }) => 
+      attr.trait_type === 'Color Name' && attr.value !== tokenId
+    );
+    
+    return colorNameAttribute ? colorNameAttribute.value : null;
+  } catch (error) {
+    console.error('Error fetching color name from contract:', error);
+    return null;
+  }
+}
 
 export interface BaseColor {
   tokenId: string;
   name: string;
   colorValue: string;
   imageUrl: string;
+  properName?: string;
+}
+
+interface NFTImage {
+  originalUrl: string;
+}
+
+interface NFTMetadata {
+  tokenId: string;
+  name: string;
+  image: NFTImage;
+  details?: unknown;
 }
 
 // Response type for schedule updates
@@ -21,106 +73,78 @@ export interface ScheduleResponse {
 /**
  * Fetch Base Colors NFTs owned by a given address
  */
-export async function fetchOwnedBaseColors(ownerAddress: string): Promise<BaseColor[]> {
+export async function fetchOwnedBaseColors(address: string): Promise<BaseColor[]> {
   try {
-    console.log('Fetching Base Colors for address:', ownerAddress);
+    console.log('Fetching Base Colors for address:', address);
     
     // Check for API key
-    if (!ALCHEMY_API_KEY) {
-      console.error('Error: Alchemy API key is missing');
-      return [];
+    if (!ALCHEMY_API_KEY || ALCHEMY_API_KEY === 'demo') {
+      console.warn('No Alchemy API key provided. Using fallback demo key. Set NEXT_PUBLIC_ALCHEMY_API_KEY in your environment variables.');
     }
     
-    const url = `https://base-mainnet.g.alchemy.com/nft/v3/${ALCHEMY_API_KEY}/getNFTsForOwner?owner=${ownerAddress}&contractAddresses[]=${BASE_COLORS_CONTRACT}&withMetadata=true&pageSize=100&tokenUriTimeoutInMs=100`;
+    const url = `https://base-mainnet.g.alchemy.com/nft/v3/${ALCHEMY_API_KEY}/getNFTsForOwner?owner=${address}&contractAddresses[]=${BASE_COLORS_CONTRACT}&withMetadata=true&pageSize=100&tokenUriTimeoutInMs=100`;
     
     console.log('Fetching from Alchemy API');
-    
-    // Simple fetch with no timeout (we'll handle timeout at the component level)
-    const response = await fetch(url);
+    const response = await fetch(url, {
+      method: 'GET',
+      headers: {
+        'Accept': 'application/json',
+      },
+    });
     
     if (!response.ok) {
-      throw new Error(`API request failed: ${response.status} ${response.statusText}`);
+      throw new Error(`Alchemy API error: ${response.status} ${response.statusText}`);
     }
     
     const data = await response.json();
-    console.log('API returned data:', data.ownedNfts ? `${data.ownedNfts.length} NFTs` : 'No NFTs');
+    console.log('Alchemy API response:', data);
     
-    if (!data.ownedNfts || !Array.isArray(data.ownedNfts) || data.ownedNfts.length === 0) {
-      console.log('No NFTs found in API response');
-      return [];
-    }
+    const colors: BaseColor[] = [];
     
-    // Process the NFTs into BaseColor objects
-    const baseColors = data.ownedNfts.map(processNftToBaseColor);
+    // Process each NFT to extract color information
+    const promises = data.ownedNfts.map(async (nft: NFTMetadata) => {
+      const colorData = await processBaseColorNFT(nft);
+      colors.push(colorData);
+    });
     
-    console.log('Processed colors:', baseColors.length);
-    return baseColors;
+    await Promise.all(promises);
+    
+    return colors;
   } catch (error) {
     console.error('Error fetching Base Colors:', error);
-    return [];
+    throw error;
   }
 }
 
-/**
- * Process an NFT object from the API into a BaseColor
- */
-function processNftToBaseColor(nft: {
-  tokenId: string;
-  name: string;
-  image: {
-    originalUrl: string;
-  };
-  raw?: {
-    metadata?: {
-      attributes?: Array<{
-        trait_type: string;
-        value: string;
-      }>;
-    };
-  };
-}): BaseColor {
-  // Extract hex code from name (typically "#FFFFFF" format)
-  const hexCode = nft.name.startsWith('#') ? nft.name : `#${nft.name}`;
+// Helper function to process a single NFT and extract color data
+async function processBaseColorNFT(nft: NFTMetadata): Promise<BaseColor> {
+  const colorName = nft.name;
   
-  // Try to find a human-readable color name in the attributes
-  let colorName = hexCode; // Default to hex code if no other name found
+  // Extract the hex code, removing the # if present
+  const hexCode = colorName.startsWith('#') ? colorName : `#${colorName}`;
   
-  // Check if we have raw metadata with attributes
-  if (nft.raw?.metadata?.attributes && Array.isArray(nft.raw.metadata.attributes)) {
-    // Look for a color name attribute that isn't just the hex code
-    const colorNameAttr = nft.raw.metadata.attributes.find((attr: { trait_type: string; value: string }) => 
-      (attr.trait_type === 'Color Name' || attr.trait_type === 'Name') && 
-      attr.value && 
-      !attr.value.match(/^[A-F0-9]{6}$/i) // Not just a hex code without #
-    );
-    
-    if (colorNameAttr) {
-      colorName = colorNameAttr.value;
-    }
+  // For colors with just hex values as names, try to get a proper name from the contract
+  let properName = null;
+  if (colorName.startsWith('#') && /^#[0-9A-F]{6}$/i.test(colorName)) {
+    properName = await getColorNameFromContract(nft.tokenId);
   }
   
   return {
     tokenId: nft.tokenId,
-    name: colorName, // Use the human-readable name if found
+    name: colorName,
     colorValue: hexCode, // Always use the hex code for the color value
     imageUrl: nft.image.originalUrl,
+    properName: properName || undefined
   };
 }
 
 /**
- * Generate an SVG for a Base Color
+ * Generate an SVG representing a color
  */
 export function generateColorSvg(colorHex: string): string {
-  // Remove # if present
-  const color = colorHex.startsWith('#') ? colorHex : `#${colorHex}`;
-  
-  const svg = `
-  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
-    <rect width="100" height="100" fill="${color}"/>
-  </svg>
-  `;
-  
-  return `data:image/svg+xml;base64,${btoa(svg)}`;
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+    <rect width="100" height="100" fill="${colorHex}"/>
+  </svg>`;
 }
 
 /**

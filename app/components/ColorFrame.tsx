@@ -51,7 +51,6 @@ export default function ColorFrame({ context }: ColorFrameProps) {
   const { user, isAuthenticated } = useNeynarContext();
   const [ownedColors, setOwnedColors] = useState<BaseColor[]>([]);
   const [selectedColor, setSelectedColor] = useState<string | null>(null);
-  const [selectedColorName, setSelectedColorName] = useState<string | null>(null);
   // We need deepLinkUrl for QR code functionality
   const deepLinkUrlState = useState<string | null>(null);
   const deepLinkUrl = deepLinkUrlState[0];
@@ -253,7 +252,6 @@ export default function ColorFrame({ context }: ColorFrameProps) {
         if (colors.length > 0) {
           setOwnedColors(colors);
           setSelectedColor(colors[0].colorValue);
-          setSelectedColorName(colors[0].name);
           toast.success(`Found ${colors.length} Base Colors`);
         } else {
           console.log('No Base Colors found');
@@ -1344,19 +1342,17 @@ export default function ColorFrame({ context }: ColorFrameProps) {
             className="w-full aspect-square rounded-md shadow-lg mb-3 relative"
             style={{ backgroundColor: selectedColor || '#ffffff' }}
           >
-            {/* Color hex value displayed in top right of the preview */}
+            {/* Show proper name if available, otherwise show hex code in top right */}
             {selectedColor && (
               <div className="absolute top-3 right-3">
-                <p className="text-xs font-mono bg-black/80 py-1 px-2 rounded-md text-slate-300">{selectedColor}</p>
+                <p className="text-xs font-mono bg-black/80 py-1 px-2 rounded-md text-slate-300">
+                  {ownedColors.find(c => c.colorValue === selectedColor)?.properName || selectedColor}
+                </p>
               </div>
             )}
             
-            {/* Color name displayed at the bottom */}
-            {selectedColorName && selectedColorName !== selectedColor && (
-              <div className="absolute bottom-3 left-3 right-3">
-                <p className="text-sm font-medium bg-black/80 py-1 px-3 rounded-md text-white text-center truncate">{selectedColorName}</p>
-              </div>
-            )}
+            {/* Remove the bottom name display since we're showing either proper name or hex in top right */}
+            
           </div>
           
           {/* Color options with horizontal scrolling */}
@@ -1372,7 +1368,6 @@ export default function ColorFrame({ context }: ColorFrameProps) {
                 style={{ backgroundColor: color.colorValue }}
                 onClick={() => {
                   setSelectedColor(color.colorValue);
-                  setSelectedColorName(color.name);
                 }}
                 title={color.name}
               />
