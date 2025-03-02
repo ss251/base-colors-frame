@@ -16,7 +16,7 @@ export function generateMetadata(): Metadata {
     title: "Base Colors PFP",
     description: "Change your Farcaster profile picture to any Base Colors you own",
     openGraph: {
-      images: [`${url}/base-colors-og.svg`],
+      images: [`${url}/basecolors_logo.png`],
       title: "Base Colors PFP",
       description: "Change your Farcaster profile picture to any Base Colors you own",
     },
@@ -27,14 +27,14 @@ export function generateMetadata(): Metadata {
     other: {
       "fc:frame": JSON.stringify({
         version: "next",
-        imageUrl: `${url}/base-colors-og.svg`,
+        imageUrl: `${url}/basecolors_logo.png`,
         button: {
           title: "Set Base Colors PFP",
           action: {
             type: "launch_frame",
             name: "Base Colors PFP",
             url: url,
-            splashImageUrl: `${url}/splash.svg`,
+            splashImageUrl: `${url}/basecolors_logo.png`,
             splashBackgroundColor: "#0F2352",
           },
         },
