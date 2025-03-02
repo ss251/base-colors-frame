@@ -692,6 +692,27 @@ export default function ColorFrame({ context }: ColorFrameProps) {
   
   // Function to start polling for signer approval
   const startSignerApprovalPolling = (signerUuid: string) => {
+    // Validate signer UUID - if it's undefined, null, or empty string, reset to connect flow
+    if (!signerUuid) {
+      console.error('[POLLING] No valid signer UUID provided for polling. Resetting to connect flow.');
+      // Clear any existing interval
+      if (signerCheckIntervalRef.current) {
+        clearInterval(signerCheckIntervalRef.current);
+        signerCheckIntervalRef.current = null;
+      }
+      
+      // Reset state to show connect flow again
+      setManagedSigner(null);
+      setIsCheckingSigner(false);
+      
+      // Clear local storage to prevent persistent issues
+      localStorage.removeItem('neynar_auth_data');
+      localStorage.removeItem('neynar_auth_success');
+      
+      toast.error('Signer information was invalid. Please connect again.');
+      return; // Exit early
+    }
+    
     // Clear any existing interval
     if (signerCheckIntervalRef.current) {
       clearInterval(signerCheckIntervalRef.current);
@@ -723,6 +744,21 @@ export default function ColorFrame({ context }: ColorFrameProps) {
         
         if (!signerUuidToCheck) {
           console.error("[ERROR] No signer UUID available for polling");
+          // Stop polling and reset to connect flow
+          if (signerCheckIntervalRef.current) {
+            clearInterval(signerCheckIntervalRef.current);
+            signerCheckIntervalRef.current = null;
+          }
+          
+          // Reset state to show connect flow again
+          setManagedSigner(null);
+          setIsCheckingSigner(false);
+          
+          // Clear local storage to prevent persistent issues
+          localStorage.removeItem('neynar_auth_data');
+          localStorage.removeItem('neynar_auth_success');
+          
+          toast.error('Signer information was lost. Please connect again.');
           return;
         }
 
@@ -1344,6 +1380,10 @@ export default function ColorFrame({ context }: ColorFrameProps) {
                                   setTimeout(() => {
                                     startSignerApprovalPolling(parsedData.signer_uuid);
                                   }, 100);
+                                } else {
+                                  console.error('[TRY-AGAIN] Recovered data missing signer UUID');
+                                  // Force a reset if UUID is missing
+                                  throw new Error('Invalid signer data: missing UUID');
                                 }
                                 return; // Skip the reset
                               }
