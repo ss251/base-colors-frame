@@ -1,8 +1,8 @@
 {
   "accountAssociation": {
     "header": "eyJmaWQiOjY1NzM3MCwidHlwZSI6ImN1c3RvZHkiLCJrZXkiOiIweGMzNzNDRjY4ZjNDYWIwODFiZTg2QzFmMEZjN2I2NWFDYTAzNTg3ZDEifQ",
-    "payload": "eyJkb21haW4iOiJiYXNlLWNvbG9ycy1mcmFtZS52ZXJjZWwuYXBwIn0",
-    "signature": "MHg5MDZhNWQwYzM1NzI4NmVjYjNkN2JmOTA1MjUzYjRiMmEwNmQ2OWE4YmZkYmE4MjkxMjA1YWJlMGQ5MjA2ZTFkNDg4NzBkMjNiYzZiZDU5ZWEzYjAyNDViYWM5ODU3OGE4YTkxOWI3NzcyNDYzMDhhYzNlMDdmMGYzMWUwY2IyNDFj"
+    "payload": "eyJkb21haW4iOiJiYXNlLWNvbG9ycy1mcmFtZS5hcHAifQ",
+    "signature": "MHgzMmMyNjA3ZDEwMWY5NjIxYjFmNjczN2UzOTA5MTdjMTBkMDI0NDIyYmNkYjI5MDg2YjU4YThjMzE0MDc5YTQzNGIyZWQ2YjFiYTg2OTRmY2NmYzczOWUwMmE2YmJjNTc3Y2U4NjcyODg0MDM5OGVjMjZhZTMzN2EyOWE3OTM5YTFi"
   },
   "frame": {
     "version": "1",
@@ -15,4 +15,4 @@
     "splashBackgroundColor": "#0F2352",
     "webhookUrl": "https://base-colors-frame.vercel.app/api/webhook"
   }
-} 
+}
