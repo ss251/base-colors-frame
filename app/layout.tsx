@@ -13,11 +13,11 @@ export function generateMetadata(): Metadata {
   
   return {
     metadataBase: new URL(url),
-    title: "Base Colors PFP",
+    title: "color pfps",
     description: "Change your Farcaster profile picture to any Base Colors you own",
     openGraph: {
       images: [`${url}/basecolors_logo.png`],
-      title: "Base Colors PFP",
+      title: "color pfps",
       description: "Change your Farcaster profile picture to any Base Colors you own",
     },
     icons: {
@@ -32,7 +32,7 @@ export function generateMetadata(): Metadata {
           title: "Set Base Colors PFP",
           action: {
             type: "launch_frame",
-            name: "Base Colors PFP",
+            name: "color pfps",
             url: url,
             splashImageUrl: `${url}/basecolors_logo.png`,
             splashBackgroundColor: "#0F2352",

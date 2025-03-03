@@ -1270,7 +1270,7 @@ export default function ColorFrame({ context }: ColorFrameProps) {
     return (
       <div className="p-4 text-center">
         <Toaster />
-        <h1 className="text-xl font-bold mb-4">Base Colors Profile Picture Manager</h1>
+        <h1 className="text-xl font-bold mb-4">color pfps</h1>
         <p>
           This application needs to be opened in a Farcaster frame.
           <br />
@@ -1412,7 +1412,7 @@ export default function ColorFrame({ context }: ColorFrameProps) {
             className="w-10 h-10 mr-3" 
           />
           <h1 className="text-3xl font-bold text-white">
-            Base Colors PFP
+            color pfps
           </h1>
         </div>
         

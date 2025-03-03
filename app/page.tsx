@@ -28,7 +28,7 @@ export default function Home() {
     return (
       <main className="flex min-h-screen flex-col items-center justify-center p-4 bg-blue-900 text-white">
         <div className="max-w-md text-center">
-          <h1 className="text-3xl font-bold mb-4">Base Colors PFP Manager</h1>
+          <h1 className="text-3xl font-bold mb-4">color pfps</h1>
           <p className="mb-6">
             This app allows you to set any Base Colors you own as your Farcaster profile picture.
           </p>
