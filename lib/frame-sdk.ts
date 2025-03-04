@@ -90,26 +90,97 @@ export const frameSdk: ExtendedFrameSdk = {
         throw new Error('Not in a frame context');
       }
       
-      // For frame context, use Ethereum personal_sign
-      // This is a mock implementation - in a real frame this would interact with the frame
       console.log('Attempting to sign message in frame context:', options.message);
       
-      // In a real frame, this would be handled by the frame provider
+      // First try using the Farcaster SDK wallet if available
+      if (sdk.wallet && sdk.wallet.ethProvider) {
+        console.log('Using Farcaster SDK wallet for signing');
+        try {
+          // Get accounts or request connection
+          const accounts = await sdk.wallet.ethProvider.request({ 
+            method: 'eth_accounts' 
+          });
+          
+          const accountsArray = Array.isArray(accounts) ? accounts : [];
+          
+          if (accountsArray.length === 0) {
+            console.log('No accounts available in SDK wallet, attempting to connect');
+            const requestedAccounts = await sdk.wallet.ethProvider.request({
+              method: 'eth_requestAccounts',
+            });
+            
+            if (!Array.isArray(requestedAccounts) || requestedAccounts.length === 0) {
+              throw new Error('Failed to connect accounts via SDK wallet');
+            }
+          }
+          
+          // Get accounts again after potential connection
+          const activeAccounts = await sdk.wallet.ethProvider.request({ 
+            method: 'eth_accounts' 
+          });
+          
+          if (!Array.isArray(activeAccounts) || activeAccounts.length === 0) {
+            throw new Error('No active accounts available');
+          }
+          
+          console.log('Active accounts from SDK wallet:', activeAccounts);
+          
+          // Format the address to ensure it has 0x prefix
+          const address = typeof activeAccounts[0] === 'string' && activeAccounts[0].startsWith('0x') 
+            ? activeAccounts[0] as `0x${string}` 
+            : `0x${activeAccounts[0]}` as `0x${string}`;
+            
+          // Format message to ensure it has 0x prefix if not already a string
+          const data = options.message.startsWith('0x') 
+            ? options.message as `0x${string}` 
+            : options.message;
+            
+          console.log('Using signing params:', data, address);
+          
+          const signature = await sdk.wallet.ethProvider.request({
+            method: 'personal_sign',
+            params: [data, address] as [`0x${string}`, `0x${string}`]
+          });
+          
+          return signature as string;
+        } catch (sdkError) {
+          console.error('Error using SDK wallet for signing:', sdkError);
+          // Fall through to window.ethereum as backup
+        }
+      }
+      
+      // Fallback to window.ethereum (likely desktop case)
       if (typeof window.ethereum !== 'undefined') {
+        console.log('Falling back to window.ethereum for signing');
+        
         const accounts = await window.ethereum.request({ 
           method: 'eth_requestAccounts' 
-        }) as string[];
+        });
         
-        if (accounts.length === 0) {
+        const accountsArray = Array.isArray(accounts) ? accounts : [];
+        
+        if (accountsArray.length === 0) {
           throw new Error('No accounts available to sign');
         }
         
+        // Format the address to ensure it has 0x prefix
+        const address = typeof accountsArray[0] === 'string' && accountsArray[0].startsWith('0x') 
+          ? accountsArray[0] as `0x${string}` 
+          : `0x${accountsArray[0]}` as `0x${string}`;
+        
+        // Format message to ensure it has 0x prefix if not already a string
+        const data = options.message.startsWith('0x') 
+          ? options.message as `0x${string}` 
+          : options.message;
+        
+        console.log('Using signing params with window.ethereum:', data, address);
+        
         const signature = await window.ethereum.request({
           method: 'personal_sign',
-          params: [options.message, accounts[0]],
-        }) as string;
+          params: [data, address] as [`0x${string}`, `0x${string}`]
+        });
         
-        return signature;
+        return signature as string;
       } else {
         throw new Error('No Ethereum provider available for signing');
       }
