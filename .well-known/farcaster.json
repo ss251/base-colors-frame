@@ -7,12 +7,12 @@
   "frame": {
     "version": "1",
     "name": "color pfps",
-    "iconUrl": "https://base-colors-frame.vercel.app/basecolors_logo.png",
-    "homeUrl": "https://base-colors-frame.vercel.app",
-    "imageUrl": "https://base-colors-frame.vercel.app/basecolors_logo.png",
-    "buttonTitle": "Set Base Colors PFP",
-    "splashImageUrl": "https://base-colors-frame.vercel.app/basecolors_logo.png",
+    "iconUrl": "https://color-pfps.vercel.app/basecolors_logo.png",
+    "homeUrl": "https://color-pfps.vercel.app",
+    "imageUrl": "https://color-pfps.vercel.app/basecolors_logo.png",
+    "buttonTitle": "Set Color PFP",
+    "splashImageUrl": "https://color-pfps.vercel.app/basecolors_logo.png",
     "splashBackgroundColor": "#0F2352",
-    "webhookUrl": "https://base-colors-frame.vercel.app/api/webhook"
+    "webhookUrl": "https://color-pfps.vercel.app/api/webhook"
   }
 }

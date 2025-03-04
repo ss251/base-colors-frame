@@ -9,7 +9,7 @@ const inter = Inter({ subsets: ["latin"] });
 
 // Generate metadata with frame support for Farcaster
 export function generateMetadata(): Metadata {
-  const url = process.env.NEXT_PUBLIC_BASE_URL || "https://base-colors-frame.vercel.app";
+  const url = process.env.NEXT_PUBLIC_BASE_URL || "https://color-pfps.vercel.app";
   
   return {
     metadataBase: new URL(url),
